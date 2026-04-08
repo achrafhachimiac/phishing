@@ -14,7 +14,8 @@
     "clean": "rimraf dist dist-server storage",
     "lint": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.backend.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepare": "husky"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -40,6 +41,7 @@
     "@types/supertest": "^6.0.3",
     "autoprefixer": "^10.4.21",
     "concurrently": "^9.2.1",
+    "husky": "^9.1.7",
     "jsdom": "^29.0.2",
     "rimraf": "^6.0.1",
     "supertest": "^7.1.4",
