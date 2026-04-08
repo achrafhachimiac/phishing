@@ -15,7 +15,7 @@
     "lint": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.backend.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepare": "husky"
+    "prepare": "husky || true"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
