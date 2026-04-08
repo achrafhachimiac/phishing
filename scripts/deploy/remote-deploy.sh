@@ -87,8 +87,19 @@ main() {
   systemctl enable "${SERVICE_NAME}"
   systemctl restart "${SERVICE_NAME}"
 
-  if command -v curl >/dev/null 2>&1; then
-    curl --fail --silent "http://127.0.0.1:${PORT}/api/health" >/dev/null
+  # Wait for the Node process to bind its port
+  local retries=10
+  while [ $retries -gt 0 ]; do
+    if curl --fail --silent "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+      break
+    fi
+    retries=$((retries - 1))
+    sleep 2
+  done
+
+  if [ $retries -eq 0 ]; then
+    echo "Health check failed after waiting" >&2
+    exit 1
   fi
 
   rm -f "${RELEASE_ARCHIVE}"
