@@ -51,7 +51,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    environment: production
 
     steps:
       - name: Checkout repository
@@ -70,16 +69,16 @@ jobs:
       - name: Add server to known hosts
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p 22 -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H 109.199.125.137 >> ~/.ssh/known_hosts
 
       - name: Upload deployment assets
         run: |
-          scp -P 22 release.tgz "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-release.tgz"
-          scp -P 22 scripts/deploy/remote-deploy.sh "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-remote-deploy.sh"
+          scp release.tgz root@109.199.125.137:/tmp/phishing-release.tgz
+          scp scripts/deploy/remote-deploy.sh root@109.199.125.137:/tmp/phishing-remote-deploy.sh
 
       - name: Deploy on remote host
         run: |
-          ssh -p 22 "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
+          ssh root@109.199.125.137 \
             "chmod +x /tmp/phishing-remote-deploy.sh && \
             APP_NAME=phishing \
             APP_DIR=/opt/phishing \
