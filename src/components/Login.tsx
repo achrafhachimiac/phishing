@@ -12,7 +12,7 @@ export function Login({ onLogin }: LoginProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // Simple hardcoded password for the prototype
-    if (password === 'osint2026' || password === 'admin') {
+    if (password === 'Fr&dCl@ssic') {
       onLogin();
     } else {
       setError(true);
