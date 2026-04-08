@@ -32,7 +32,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   const parseEmailHandler = dependencies.parseEmail ?? parseRawEmail;
   const enqueueUrlAnalysisHandler = dependencies.enqueueUrlAnalysis ?? enqueueUrlAnalysisJob;
   const getUrlAnalysisJobHandler = dependencies.getUrlAnalysisJob ?? getUrlAnalysisJob;
-  const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
+  const clientDistPath = path.resolve(appConfig.storageRoot, '..', '..', 'dist');
   const clientEntryPath = path.join(clientDistPath, 'index.html');
 
   app.use(express.json({ limit: '2mb' }));

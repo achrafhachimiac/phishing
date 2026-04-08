@@ -50,10 +50,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: validate
-    if: ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') && vars.SSH_HOST != '' && vars.SSH_USER != ''
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     environment: production
-    env:
-      APP_ENV_FILE: ${{ secrets.APP_ENV_FILE }}
 
     steps:
       - name: Checkout repository
@@ -72,31 +70,20 @@ jobs:
       - name: Add server to known hosts
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "${{ vars.SSH_PORT || '22' }}" -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts
-
-      - name: Render application environment file
-        if: env.APP_ENV_FILE != ''
-        run: |
-          cat <<'EOF' > app.env
-          ${{ env.APP_ENV_FILE }}
-          EOF
+          ssh-keyscan -p ${{ vars.SSH_PORT }} -H ${{ vars.SSH_HOST }} >> ~/.ssh/known_hosts
 
       - name: Upload deployment assets
         run: |
-          scp -P "${{ vars.SSH_PORT || '22' }}" release.tgz "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-release.tgz"
-          scp -P "${{ vars.SSH_PORT || '22' }}" scripts/deploy/remote-deploy.sh "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-remote-deploy.sh"
-          if [ -f app.env ]; then
-            scp -P "${{ vars.SSH_PORT || '22' }}" app.env "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing.env"
-          fi
+          scp -P ${{ vars.SSH_PORT }} release.tgz ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-release.tgz
+          scp -P ${{ vars.SSH_PORT }} scripts/deploy/remote-deploy.sh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-remote-deploy.sh
 
       - name: Deploy on remote host
         run: |
-          ssh -p "${{ vars.SSH_PORT || '22' }}" "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
+          ssh -p ${{ vars.SSH_PORT }} ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} \
             "chmod +x /tmp/phishing-remote-deploy.sh && \
-            APP_NAME='${{ vars.APP_NAME }}' \
-            APP_DIR='${{ vars.APP_DIR }}' \
-            SERVICE_NAME='${{ vars.SYSTEMD_SERVICE }}' \
-            PORT='${{ vars.APP_PORT }}' \
-            RELEASE_ARCHIVE='/tmp/phishing-release.tgz' \
-            ENV_FILE_PATH='/tmp/phishing.env' \
+            APP_NAME=phishing \
+            APP_DIR=/opt/phishing \
+            SERVICE_NAME=phishing \
+            PORT=4000 \
+            RELEASE_ARCHIVE=/tmp/phishing-release.tgz \
             /tmp/phishing-remote-deploy.sh"
