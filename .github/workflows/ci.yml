@@ -68,18 +68,29 @@ jobs:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Add server to known hosts
+        env:
+          SERVER_HOST: ${{ vars.SSH_HOST }}
+          SERVER_PORT: ${{ vars.SSH_PORT }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p ${{ vars.SSH_PORT }} -H ${{ vars.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${SERVER_PORT}" -H "${SERVER_HOST}" >> ~/.ssh/known_hosts
 
       - name: Upload deployment assets
+        env:
+          SERVER_HOST: ${{ vars.SSH_HOST }}
+          SERVER_PORT: ${{ vars.SSH_PORT }}
+          SERVER_USER: ${{ vars.SSH_USER }}
         run: |
-          scp -P ${{ vars.SSH_PORT }} release.tgz ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-release.tgz
-          scp -P ${{ vars.SSH_PORT }} scripts/deploy/remote-deploy.sh ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/phishing-remote-deploy.sh
+          scp -P "${SERVER_PORT}" release.tgz "${SERVER_USER}@${SERVER_HOST}:/tmp/phishing-release.tgz"
+          scp -P "${SERVER_PORT}" scripts/deploy/remote-deploy.sh "${SERVER_USER}@${SERVER_HOST}:/tmp/phishing-remote-deploy.sh"
 
       - name: Deploy on remote host
+        env:
+          SERVER_HOST: ${{ vars.SSH_HOST }}
+          SERVER_PORT: ${{ vars.SSH_PORT }}
+          SERVER_USER: ${{ vars.SSH_USER }}
         run: |
-          ssh -p ${{ vars.SSH_PORT }} ${{ vars.SSH_USER }}@${{ vars.SSH_HOST }} \
+          ssh -p "${SERVER_PORT}" "${SERVER_USER}@${SERVER_HOST}" \
             "chmod +x /tmp/phishing-remote-deploy.sh && \
             APP_NAME=phishing \
             APP_DIR=/opt/phishing \
