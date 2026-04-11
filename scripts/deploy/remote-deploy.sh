@@ -57,6 +57,55 @@ WantedBy=multi-user.target
 EOF
 }
 
+setup_novnc_proxy() {
+  if ! command -v nginx >/dev/null 2>&1; then
+    echo "Nginx not found; skipping noVNC reverse-proxy setup."
+    return
+  fi
+
+  local snippet="scripts/deploy/nginx-novnc-proxy.conf"
+  if [ ! -f "${snippet}" ]; then
+    return
+  fi
+
+  mkdir -p /etc/nginx/snippets
+  cp "${snippet}" /etc/nginx/snippets/novnc-proxy.conf
+
+  # Check whether the snippet is already included in an enabled server block.
+  local already_included=0
+  for conf in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    [ -f "${conf}" ] || continue
+    if grep -q 'novnc-proxy\.conf' "${conf}"; then
+      already_included=1
+      break
+    fi
+  done
+
+  if [ "${already_included}" = "0" ]; then
+    # Try to auto-inject into the server block that proxies the app.
+    for conf in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+      [ -f "${conf}" ] || continue
+      if grep -qE "proxy_pass.*127\\.0\\.0\\.1.*${PORT}" "${conf}" 2>/dev/null; then
+        sed -i '0,/server_name/{/server_name/a\    include /etc/nginx/snippets/novnc-proxy.conf;' "${conf}" && \
+          echo "Injected noVNC proxy snippet into ${conf}"
+        break
+      fi
+    done
+  fi
+
+  if nginx -t 2>/dev/null; then
+    systemctl reload nginx
+    echo "Nginx reloaded with noVNC WebSocket proxy support."
+  else
+    echo "Warning: nginx config test failed; removing injected snippet line." >&2
+    for conf in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+      [ -f "${conf}" ] || continue
+      sed -i '/novnc-proxy\.conf/d' "${conf}"
+    done
+    nginx -t 2>/dev/null && systemctl reload nginx
+  fi
+}
+
 main() {
   install_node
 
@@ -83,6 +132,10 @@ main() {
 
   if [ "${ENABLE_LOCAL_BROWSER_SANDBOX}" = "1" ] && [ -f "scripts/deploy/install-local-browser-sandbox.sh" ]; then
     bash "scripts/deploy/install-local-browser-sandbox.sh"
+  fi
+
+  if [ "${ENABLE_LOCAL_BROWSER_SANDBOX}" = "1" ]; then
+    setup_novnc_proxy
   fi
 
   ln -sfn "${release_dir}" "${APP_DIR}/current"
