@@ -8,6 +8,7 @@ SERVICE_NAME="${SERVICE_NAME:-phishing}"
 PORT="${PORT:-4000}"
 RELEASE_ARCHIVE="${RELEASE_ARCHIVE:-/tmp/${APP_NAME}-release.tgz}"
 ENV_FILE_PATH="${ENV_FILE_PATH:-}"
+ENABLE_LOCAL_BROWSER_SANDBOX="${ENABLE_LOCAL_BROWSER_SANDBOX:-0}"
 
 install_node() {
   if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
@@ -79,6 +80,10 @@ main() {
 
   cd "${release_dir}"
   npm ci --omit=dev
+
+  if [ "${ENABLE_LOCAL_BROWSER_SANDBOX}" = "1" ] && [ -f "scripts/deploy/install-local-browser-sandbox.sh" ]; then
+    bash "scripts/deploy/install-local-browser-sandbox.sh"
+  fi
 
   ln -sfn "${release_dir}" "${APP_DIR}/current"
 

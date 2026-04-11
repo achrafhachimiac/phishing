@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Login } from './components/Login';
 import { DomainAnalysis } from './components/DomainAnalysis';
 import { EmailAnalysis } from './components/EmailAnalysis';
+import { BrowserSandbox } from './components/BrowserSandbox';
+import { FileAnalysis } from './components/FileAnalysis';
 import { Terminal, Shield, LogOut } from 'lucide-react';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [activeTab, setActiveTab] = useState<'domain' | 'email'>('domain');
+  const [activeTab, setActiveTab] = useState<'domain' | 'email' | 'sandbox' | 'files'>('domain');
 
   if (!isLoggedIn) {
     return <Login onLogin={() => setIsLoggedIn(true)} />;
@@ -47,10 +49,25 @@ export default function App() {
           >
             [2] FULL EMAIL ANALYSIS
           </button>
+          <button
+            onClick={() => setActiveTab('sandbox')}
+            className={`cli-button px-6 py-3 flex-1 md:flex-none ${activeTab === 'sandbox' ? 'bg-cyber-red text-cyber-bg shadow-[0_0_15px_rgba(255,42,42,0.5)]' : ''}`}
+          >
+            [3] URL SANDBOX
+          </button>
+          <button
+            onClick={() => setActiveTab('files')}
+            className={`cli-button px-6 py-3 flex-1 md:flex-none ${activeTab === 'files' ? 'bg-cyber-red text-cyber-bg shadow-[0_0_15px_rgba(255,42,42,0.5)]' : ''}`}
+          >
+            [4] FILE ANALYSIS
+          </button>
         </div>
 
         <main className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-          {activeTab === 'domain' ? <DomainAnalysis /> : <EmailAnalysis />}
+          {activeTab === 'domain' ? <DomainAnalysis /> : null}
+          {activeTab === 'email' ? <EmailAnalysis /> : null}
+          {activeTab === 'sandbox' ? <BrowserSandbox /> : null}
+          {activeTab === 'files' ? <FileAnalysis /> : null}
         </main>
         
         <footer className="mt-12 text-center text-xs opacity-50 border-t border-cyber-red-dim pt-4">

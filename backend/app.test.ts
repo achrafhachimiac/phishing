@@ -438,4 +438,198 @@ describe('backend app', () => {
     expect(response.body.results[0].externalScans.urlhaus.status).toBe('not_listed');
     expect(response.body.results[0].tracePath).toContain('storage/traces');
   });
+
+  it('creates a browser sandbox job and returns its initial state', async () => {
+    const app = createApp({
+      enqueueBrowserSandboxJob: async () => ({
+        jobId: 'sandbox_job_123',
+        status: 'queued',
+        requestedUrl: 'https://example.org/',
+        expiresAt: '2026-04-11T12:15:00.000Z',
+        session: null,
+        result: null,
+      }),
+    });
+
+    const response = await request(app)
+      .post('/api/sandbox/browser')
+      .send({ url: 'https://example.org' });
+
+    expect(response.status).toBe(202);
+    expect(response.body.jobId).toBe('sandbox_job_123');
+    expect(response.body.status).toBe('queued');
+  });
+
+  it('stops a browser sandbox job by id', async () => {
+    const app = createApp({
+      stopBrowserSandboxJob: async () => ({
+        jobId: 'sandbox_job_123',
+        status: 'stopped',
+        requestedUrl: 'https://example.org/',
+        expiresAt: '2026-04-11T12:15:00.000Z',
+        session: {
+          provider: 'novnc',
+          sessionId: 'sandbox_job_123',
+          status: 'stopped',
+          startedAt: '2026-04-11T12:00:00.000Z',
+          stoppedAt: '2026-04-11T12:02:00.000Z',
+          runtime: {
+            displayNumber: 101,
+            vncPort: 5901,
+            novncPort: 7601,
+            sessionDirectory: 'storage/sandbox-sessions/sandbox_job_123',
+          },
+          access: {
+            mode: 'none',
+            url: null,
+            note: 'Stopped by analyst.',
+          },
+        },
+        result: {
+          originalUrl: 'https://example.org/',
+          finalUrl: null,
+          title: null,
+          session: {
+            provider: 'novnc',
+            sessionId: 'sandbox_job_123',
+            status: 'stopped',
+            startedAt: '2026-04-11T12:00:00.000Z',
+            stoppedAt: '2026-04-11T12:02:00.000Z',
+            runtime: {
+              displayNumber: 101,
+              vncPort: 5901,
+              novncPort: 7601,
+              sessionDirectory: 'storage/sandbox-sessions/sandbox_job_123',
+            },
+            access: {
+              mode: 'none',
+              url: null,
+              note: 'Stopped by analyst.',
+            },
+          },
+          access: {
+            mode: 'none',
+            url: null,
+            note: 'Stopped by analyst.',
+          },
+          screenshotPath: null,
+          tracePath: null,
+          redirectChain: [],
+          requestedDomains: [],
+          scriptUrls: [],
+          consoleErrors: [],
+          downloads: [],
+          artifacts: [],
+          status: 'stopped',
+          error: 'Sandbox session stopped by analyst.',
+        },
+      }),
+    });
+
+    const response = await request(app).post('/api/sandbox/browser/sandbox_job_123/stop');
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('stopped');
+    expect(response.body.result.status).toBe('stopped');
+  });
+
+  it('creates a file analysis job and returns its initial state', async () => {
+    const app = createApp({
+      enqueueFileAnalysisJob: async (files) => ({
+        jobId: 'file_job_123',
+        status: 'queued',
+        queuedFiles: files.map((file) => file.filename),
+        results: [],
+      }),
+    });
+
+    const response = await request(app)
+      .post('/api/analyze/files')
+      .send({
+        files: [
+          {
+            filename: 'invoice.pdf',
+            contentBase64: Buffer.from('%PDF-1.7').toString('base64'),
+            contentType: 'application/pdf',
+          },
+        ],
+      });
+
+    expect(response.status).toBe(202);
+    expect(response.body.jobId).toBe('file_job_123');
+    expect(response.body.queuedFiles).toEqual(['invoice.pdf']);
+  });
+
+  it('returns a file analysis job by id', async () => {
+    const app = createApp({
+      getFileAnalysisJob: async () => ({
+        jobId: 'file_job_123',
+        status: 'completed',
+        queuedFiles: ['invoice.pdf'],
+        results: [
+          {
+            filename: 'invoice.pdf',
+            contentType: 'application/pdf',
+            detectedType: 'pdf',
+            extension: 'pdf',
+            size: 128,
+            sha256: 'abc123',
+            extractedUrls: ['https://example.org'],
+            indicators: [
+              {
+                kind: 'embedded_url',
+                severity: 'medium',
+                value: '1 embedded URL(s)',
+              },
+            ],
+            parserReports: [
+              {
+                parser: 'pdf',
+                summary: 'PDF parser found 1 object(s) and 0 auto-action marker(s).',
+                details: ['Embedded URLs: 1'],
+              },
+            ],
+            riskScore: 20,
+            verdict: 'clean',
+            summary: 'No high-confidence malicious indicators were found during static analysis.',
+            storagePath: 'storage/uploads/file_job_123/00-invoice.pdf',
+            artifacts: [
+              {
+                type: 'upload',
+                label: 'invoice.pdf',
+                path: 'storage/uploads/file_job_123/00-invoice.pdf',
+                mimeType: 'application/pdf',
+                size: 128,
+              },
+            ],
+            externalScans: {
+              virustotal: {
+                status: 'unavailable',
+                malicious: null,
+                suspicious: null,
+                reference: null,
+              },
+              clamav: {
+                status: 'not_configured',
+                signature: null,
+                engine: null,
+                detail: null,
+              },
+              yara: {
+                status: 'not_configured',
+                rules: [],
+                detail: null,
+              },
+            },
+          },
+        ],
+      }),
+    });
+
+    const response = await request(app).get('/api/analyze/files/file_job_123');
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('completed');
+    expect(response.body.results[0].detectedType).toBe('pdf');
+  });
 });

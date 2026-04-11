@@ -5,6 +5,10 @@ export const storagePathsSchema = z.object({
   reports: z.string(),
   screenshots: z.string(),
   traces: z.string(),
+  sandboxSessions: z.string(),
+  downloads: z.string(),
+  uploads: z.string(),
+  fileReports: z.string(),
 });
 
 export const healthResponseSchema = z.object({
@@ -287,6 +291,160 @@ export const urlAnalysisJobSchema = z.object({
   results: z.array(urlAnalysisResultSchema),
 });
 
+export const browserSandboxRequestSchema = z.object({
+  url: z.string().trim().min(1),
+});
+
+export const browserSandboxAccessSchema = z.object({
+  mode: z.enum(['embedded', 'external', 'none']),
+  url: z.string().nullable(),
+  note: z.string().nullable(),
+});
+
+export const browserSandboxSessionSchema = z.object({
+  provider: z.string(),
+  sessionId: z.string(),
+  status: z.enum(['ready', 'stopped', 'unavailable']),
+  startedAt: z.string(),
+  stoppedAt: z.string().nullable(),
+  runtime: z.object({
+    displayNumber: z.number().int().nonnegative(),
+    vncPort: z.number().int().positive(),
+    novncPort: z.number().int().positive(),
+    sessionDirectory: z.string(),
+  }),
+  access: browserSandboxAccessSchema,
+});
+
+export const browserSandboxArtifactSchema = z.object({
+  type: z.enum(['screenshot', 'trace', 'download']),
+  label: z.string(),
+  path: z.string(),
+  mimeType: z.string().nullable(),
+  size: z.number().int().nonnegative().nullable(),
+});
+
+export const observedDownloadSchema = z.object({
+  filename: z.string(),
+  path: z.string(),
+  url: z.string().nullable(),
+  sha256: z.string(),
+  size: z.number().int().nonnegative(),
+});
+
+export const browserSandboxResultSchema = z.object({
+  originalUrl: z.string().url(),
+  finalUrl: z.string().nullable(),
+  title: z.string().nullable(),
+  session: browserSandboxSessionSchema,
+  access: browserSandboxAccessSchema,
+  screenshotPath: z.string().nullable(),
+  tracePath: z.string().nullable(),
+  redirectChain: z.array(z.string()),
+  requestedDomains: z.array(z.string()),
+  scriptUrls: z.array(z.string()),
+  consoleErrors: z.array(z.string()),
+  downloads: z.array(observedDownloadSchema),
+  artifacts: z.array(browserSandboxArtifactSchema),
+  status: z.enum(['completed', 'failed', 'stopped']),
+  error: z.string().nullable(),
+});
+
+export const browserSandboxJobSchema = z.object({
+  jobId: z.string(),
+  status: z.enum(['queued', 'running', 'completed', 'failed', 'stopped']),
+  requestedUrl: z.string().url(),
+  expiresAt: z.string().nullable(),
+  session: browserSandboxSessionSchema.nullable(),
+  result: browserSandboxResultSchema.nullable(),
+});
+
+export const fileUploadSchema = z.object({
+  filename: z.string().trim().min(1),
+  contentBase64: z.string().trim().min(1),
+  contentType: z.string().trim().min(1).nullable().optional(),
+});
+
+export const fileAnalysisRequestSchema = z.object({
+  files: z.array(fileUploadSchema).min(1),
+});
+
+export const fileIndicatorSchema = z.object({
+  kind: z.enum([
+    'embedded_url',
+    'pdf_javascript',
+    'office_macro',
+    'archive',
+    'double_extension',
+    'executable_extension',
+    'pe_header',
+    'suspicious_script',
+    'clamav_match',
+    'yara_match',
+  ]),
+  severity: z.enum(['low', 'medium', 'high']),
+  value: z.string(),
+});
+
+export const fileArtifactSchema = z.object({
+  type: z.enum(['upload', 'report', 'extracted']),
+  label: z.string(),
+  path: z.string(),
+  mimeType: z.string().nullable(),
+  size: z.number().int().nonnegative().nullable(),
+});
+
+export const fileParserReportSchema = z.object({
+  parser: z.enum(['pdf', 'office-openxml', 'archive', 'pe', 'script', 'generic']),
+  summary: z.string(),
+  details: z.array(z.string()),
+});
+
+export const fileExternalScanSchema = z.object({
+  virustotal: z.object({
+    status: z.enum(['malicious', 'clean', 'unavailable', 'not_configured']),
+    malicious: z.number().int().nullable(),
+    suspicious: z.number().int().nullable(),
+    reference: z.string().nullable(),
+  }),
+  clamav: z.object({
+    status: z.enum(['malicious', 'clean', 'error', 'unavailable', 'not_configured']),
+    signature: z.string().nullable(),
+    engine: z.string().nullable(),
+    detail: z.string().nullable(),
+  }),
+  yara: z.object({
+    status: z.enum(['match', 'clean', 'error', 'unavailable', 'not_configured']),
+    rules: z.array(z.string()),
+    detail: z.string().nullable(),
+  }),
+});
+
+export const fileStaticAnalysisResultSchema = z.object({
+  filename: z.string(),
+  contentType: z.string().nullable(),
+  detectedType: z.string(),
+  extension: z.string().nullable(),
+  size: z.number().int().nonnegative(),
+  sha256: z.string(),
+  extractedUrls: z.array(z.string()),
+  indicators: z.array(fileIndicatorSchema),
+  parserReports: z.array(fileParserReportSchema),
+  riskScore: z.number().int().min(0).max(100),
+  verdict: z.enum(['clean', 'suspicious', 'malicious']),
+  summary: z.string(),
+  storagePath: z.string().nullable(),
+  artifacts: z.array(fileArtifactSchema),
+  externalScans: fileExternalScanSchema,
+});
+
+export const fileAnalysisJobSchema = z.object({
+  jobId: z.string(),
+  status: z.enum(['queued', 'running', 'completed', 'failed']),
+  queuedFiles: z.array(z.string()),
+  results: z.array(fileStaticAnalysisResultSchema),
+});
+
 export type StoragePaths = z.infer<typeof storagePathsSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
@@ -306,3 +464,18 @@ export type EmailAnalysisResponse = z.infer<typeof emailAnalysisResponseSchema>;
 export type UrlAnalysisRequest = z.infer<typeof urlAnalysisRequestSchema>;
 export type UrlAnalysisResult = z.infer<typeof urlAnalysisResultSchema>;
 export type UrlAnalysisJob = z.infer<typeof urlAnalysisJobSchema>;
+export type BrowserSandboxRequest = z.infer<typeof browserSandboxRequestSchema>;
+export type BrowserSandboxArtifact = z.infer<typeof browserSandboxArtifactSchema>;
+export type BrowserSandboxAccess = z.infer<typeof browserSandboxAccessSchema>;
+export type BrowserSandboxSession = z.infer<typeof browserSandboxSessionSchema>;
+export type ObservedDownload = z.infer<typeof observedDownloadSchema>;
+export type BrowserSandboxResult = z.infer<typeof browserSandboxResultSchema>;
+export type BrowserSandboxJob = z.infer<typeof browserSandboxJobSchema>;
+export type FileUpload = z.infer<typeof fileUploadSchema>;
+export type FileAnalysisRequest = z.infer<typeof fileAnalysisRequestSchema>;
+export type FileIndicator = z.infer<typeof fileIndicatorSchema>;
+export type FileArtifact = z.infer<typeof fileArtifactSchema>;
+export type FileParserReport = z.infer<typeof fileParserReportSchema>;
+export type FileExternalScan = z.infer<typeof fileExternalScanSchema>;
+export type FileStaticAnalysisResult = z.infer<typeof fileStaticAnalysisResultSchema>;
+export type FileAnalysisJob = z.infer<typeof fileAnalysisJobSchema>;

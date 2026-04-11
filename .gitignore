@@ -9,3 +9,4 @@ coverage/
 *.tgz
 .env*
 !.env.example
+!.env.production.example

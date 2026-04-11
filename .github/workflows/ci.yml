@@ -38,6 +38,7 @@ jobs:
           tar -czf release.tgz \
             dist \
             dist-server \
+            scripts \
             package.json \
             package-lock.json
 
@@ -51,6 +52,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    env:
+      DEPLOY_HOST: ${{ vars.SSH_HOST || '109.199.125.137' }}
+      DEPLOY_USER: ${{ vars.SSH_USER || 'root' }}
+      DEPLOY_PORT: ${{ vars.SSH_PORT || '22' }}
+      DEPLOY_APP_DIR: ${{ vars.APP_DIR || '/opt/phishing' }}
+      DEPLOY_SERVICE_NAME: ${{ vars.SYSTEMD_SERVICE || 'phishing' }}
+      DEPLOY_APP_NAME: ${{ vars.APP_NAME || 'phishing' }}
+      DEPLOY_APP_PORT: ${{ vars.APP_PORT || '4000' }}
+      DEPLOY_ENV_PATH: /tmp/phishing.env
 
     steps:
       - name: Checkout repository
@@ -69,20 +79,30 @@ jobs:
       - name: Add server to known hosts
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H 109.199.125.137 >> ~/.ssh/known_hosts
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Write production env file
+        if: ${{ secrets.APP_ENV_FILE != '' }}
+        run: |
+          printf '%s' '${{ secrets.APP_ENV_FILE }}' > app.env
 
       - name: Upload deployment assets
         run: |
-          scp release.tgz root@109.199.125.137:/tmp/phishing-release.tgz
-          scp scripts/deploy/remote-deploy.sh root@109.199.125.137:/tmp/phishing-remote-deploy.sh
+          scp -P "$DEPLOY_PORT" release.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/phishing-release.tgz"
+          scp -P "$DEPLOY_PORT" scripts/deploy/remote-deploy.sh "$DEPLOY_USER@$DEPLOY_HOST:/tmp/phishing-remote-deploy.sh"
+          if [ -f app.env ]; then
+            scp -P "$DEPLOY_PORT" app.env "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_ENV_PATH"
+          fi
 
       - name: Deploy on remote host
         run: |
-          ssh root@109.199.125.137 \
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "chmod +x /tmp/phishing-remote-deploy.sh && \
-            APP_NAME=phishing \
-            APP_DIR=/opt/phishing \
-            SERVICE_NAME=phishing \
-            PORT=4000 \
+            APP_NAME=$DEPLOY_APP_NAME \
+            APP_DIR=$DEPLOY_APP_DIR \
+            SERVICE_NAME=$DEPLOY_SERVICE_NAME \
+            PORT=$DEPLOY_APP_PORT \
+            ENV_FILE_PATH=${{ secrets.APP_ENV_FILE != '' && '/tmp/phishing.env' || '' }} \
+            ENABLE_LOCAL_BROWSER_SANDBOX=1 \
             RELEASE_ARCHIVE=/tmp/phishing-release.tgz \
             /tmp/phishing-remote-deploy.sh"
