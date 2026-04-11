@@ -5,7 +5,7 @@ import type { BrowserSandboxJob } from '../../shared/analysis-types';
 import { isPreviewableImage, toStorageUrl } from './storage-assets';
 
 const SANDBOX_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
-const SANDBOX_MAX_POLL_ATTEMPTS = 8;
+const SANDBOX_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
 const LIVE_SESSION_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 const LIVE_SESSION_IDLE_TIMEOUT_MINUTES = 5;
 
@@ -149,7 +149,9 @@ export function BrowserSandbox() {
   };
 
   const pollSandboxJob = async (jobId: string) => {
-    for (let attempt = 0; attempt < SANDBOX_MAX_POLL_ATTEMPTS; attempt += 1) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < SANDBOX_MAX_POLL_DURATION_MS) {
       const jobResponse = await fetch(`/api/sandbox/browser/${jobId}`, {
         method: 'GET',
       });
