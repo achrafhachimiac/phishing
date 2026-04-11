@@ -51,7 +51,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   const stopBrowserSandboxJobHandler = dependencies.stopBrowserSandboxJob ?? stopBrowserSandboxJob;
   const enqueueFileAnalysisHandler = dependencies.enqueueFileAnalysisJob ?? enqueueFileAnalysisJob;
   const getFileAnalysisJobHandler = dependencies.getFileAnalysisJob ?? getFileAnalysisJob;
-  const clientDistPath = path.resolve(appConfig.storageRoot, '..', '..', 'dist');
+  const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
   const clientEntryPath = path.join(clientDistPath, 'index.html');
 
   app.use(express.json({ limit: '2mb' }));
