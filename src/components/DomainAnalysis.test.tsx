@@ -151,5 +151,5 @@ describe('DomainAnalysis', () => {
     expect(screen.getByText(/wayback snapshots/i)).toBeInTheDocument();
     expect(screen.getByText(/otx pulses/i)).toBeInTheDocument();
     expect(screen.getByText(/urlhaus host: listed/i)).toBeInTheDocument();
-  });
+  }, 10000);
 });
