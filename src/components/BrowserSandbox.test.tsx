@@ -115,6 +115,8 @@ describe('BrowserSandbox', () => {
     expect(screen.getByRole('link', { name: /open remote browser/i })).toHaveAttribute('href', 'https://fred.syntrix.ae/novnc/6161/vnc.html?autoconnect=1&resize=remote');
     expect(screen.getByRole('heading', { name: /live remote browser/i })).toBeInTheDocument();
     expect(screen.getByTitle(/live remote browser session/i)).toHaveAttribute('src', 'https://fred.syntrix.ae/novnc/6161/vnc.html?autoconnect=1&resize=remote');
+    expect(screen.getByRole('slider')).toHaveValue('720');
+    expect(screen.getByRole('button', { name: /full screen/i })).toBeInTheDocument();
     expect(screen.getByAltText(/sandbox screenshot preview/i)).toHaveAttribute('src', '/storage/sandbox-sessions/sandbox_job_123/example-org.png');
     expect(screen.getByRole('link', { name: /stored copy/i })).toHaveAttribute('href', '/storage/downloads/sandbox_job_123/payload.iso');
   });

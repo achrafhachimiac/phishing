@@ -23,6 +23,9 @@ type AnalyzeUrlInSandbox = (
 ) => Promise<Omit<BrowserSandboxResult, 'originalUrl'>>;
 
 const browserSandboxJobs = new Map<string, BrowserSandboxJob>();
+const liveSessionLeaseTimers = new Map<string, NodeJS.Timeout>();
+const DEFAULT_LIVE_SESSION_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+let liveSessionIdleTimeoutMs = DEFAULT_LIVE_SESSION_IDLE_TIMEOUT_MS;
 
 export class BrowserSandboxError extends Error {
   code: string;
@@ -61,26 +64,53 @@ export async function getBrowserSandboxJob(jobId: string): Promise<BrowserSandbo
   return browserSandboxJobs.get(jobId) ?? null;
 }
 
-export async function stopBrowserSandboxJob(jobId: string): Promise<BrowserSandboxJob | null> {
+export async function touchBrowserSandboxJob(jobId: string): Promise<BrowserSandboxJob | null> {
   const existingJob = browserSandboxJobs.get(jobId);
   if (!existingJob) {
     return null;
   }
 
-  if (existingJob.status === 'completed' || existingJob.status === 'failed' || existingJob.status === 'stopped') {
+  if (existingJob.session?.status === 'ready') {
+    scheduleLiveSessionLease(jobId);
+  }
+
+  return existingJob;
+}
+
+export async function stopBrowserSandboxJob(
+  jobId: string,
+  reason: 'analyst_stop' | 'idle_timeout' = 'analyst_stop',
+): Promise<BrowserSandboxJob | null> {
+  const existingJob = browserSandboxJobs.get(jobId);
+  if (!existingJob) {
+    return null;
+  }
+
+  clearLiveSessionLease(jobId);
+
+  const hasLiveSession = existingJob.session?.status === 'ready';
+  if (existingJob.status === 'failed' || existingJob.status === 'stopped') {
+    return existingJob;
+  }
+  if (existingJob.status === 'completed' && !hasLiveSession) {
     return existingJob;
   }
 
+  const stopMessage = reason === 'idle_timeout'
+    ? 'Sandbox session closed after 5 minutes of inactivity.'
+    : 'Sandbox session stopped by analyst.';
+  const preserveCompletedResult = existingJob.status === 'completed' && hasLiveSession && existingJob.result;
+
   const stoppedJob = browserSandboxJobSchema.parse({
     ...existingJob,
-    status: 'stopped',
-        session: existingJob.session,
+    status: preserveCompletedResult ? 'completed' : 'stopped',
+    session: existingJob.session,
     result: existingJob.result
       ? {
           ...existingJob.result,
           session: existingJob.result.session,
-          status: 'stopped',
-          error: existingJob.result.error ?? 'Sandbox session stopped by analyst.',
+          status: preserveCompletedResult ? existingJob.result.status : 'stopped',
+          error: preserveCompletedResult ? existingJob.result.error : (existingJob.result.error ?? stopMessage),
         }
       : {
           originalUrl: existingJob.requestedUrl,
@@ -104,7 +134,7 @@ export async function stopBrowserSandboxJob(jobId: string): Promise<BrowserSandb
           downloads: [],
           artifacts: [],
           status: 'stopped',
-          error: 'Sandbox session stopped by analyst.',
+          error: stopMessage,
         },
   });
 
@@ -135,7 +165,7 @@ export async function createBrowserSandboxJob(
   const session = await startBrowserSandboxSession(appConfig.browserSandbox, { jobId, url: normalizedUrl });
   const result = await analyzeUrlInSandbox(normalizedUrl, { jobId, session });
 
-  return browserSandboxJobSchema.parse({
+  const job = browserSandboxJobSchema.parse({
     jobId,
     status: result.status === 'completed' ? 'completed' : result.status,
     requestedUrl: normalizedUrl,
@@ -146,6 +176,12 @@ export async function createBrowserSandboxJob(
       ...result,
     },
   });
+
+  if (job.session?.status === 'ready') {
+    scheduleLiveSessionLease(jobId);
+  }
+
+  return job;
 }
 
 async function runBrowserSandboxJob(
@@ -188,7 +224,13 @@ async function runBrowserSandboxJob(
         },
       }),
     );
+
+    const completedJob = browserSandboxJobs.get(jobId);
+    if (completedJob?.session?.status === 'ready') {
+      scheduleLiveSessionLease(jobId);
+    }
   } catch (error) {
+    clearLiveSessionLease(jobId);
     browserSandboxJobs.set(
       jobId,
       browserSandboxJobSchema.parse({
@@ -224,6 +266,42 @@ async function runBrowserSandboxJob(
       }),
     );
   }
+}
+
+export function clearBrowserSandboxStateForTesting() {
+  for (const timer of liveSessionLeaseTimers.values()) {
+    clearTimeout(timer);
+  }
+
+  liveSessionLeaseTimers.clear();
+  browserSandboxJobs.clear();
+  liveSessionIdleTimeoutMs = DEFAULT_LIVE_SESSION_IDLE_TIMEOUT_MS;
+}
+
+export function setLiveSessionIdleTimeoutForTesting(timeoutMs: number) {
+  liveSessionIdleTimeoutMs = timeoutMs;
+}
+
+function scheduleLiveSessionLease(jobId: string) {
+  clearLiveSessionLease(jobId);
+
+  const timer = setTimeout(() => {
+    liveSessionLeaseTimers.delete(jobId);
+    void stopBrowserSandboxJob(jobId, 'idle_timeout');
+  }, liveSessionIdleTimeoutMs);
+
+  timer.unref?.();
+  liveSessionLeaseTimers.set(jobId, timer);
+}
+
+function clearLiveSessionLease(jobId: string) {
+  const existingTimer = liveSessionLeaseTimers.get(jobId);
+  if (!existingTimer) {
+    return;
+  }
+
+  clearTimeout(existingTimer);
+  liveSessionLeaseTimers.delete(jobId);
 }
 
 export async function analyzeUrlInLocalSandbox(

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertOctagon, Cpu, ExternalLink, Globe, MonitorSmartphone } from 'lucide-react';
 
 import type { BrowserSandboxJob } from '../../shared/analysis-types';
@@ -6,16 +6,78 @@ import { isPreviewableImage, toStorageUrl } from './storage-assets';
 
 const SANDBOX_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const SANDBOX_MAX_POLL_ATTEMPTS = 8;
+const LIVE_SESSION_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+const LIVE_SESSION_IDLE_TIMEOUT_MINUTES = 5;
 
 export function BrowserSandbox() {
   const [targetUrl, setTargetUrl] = useState('');
   const [sandboxJob, setSandboxJob] = useState<BrowserSandboxJob | null>(null);
   const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState('');
+  const [iframeHeight, setIframeHeight] = useState(720);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const liveBrowserContainerRef = useRef<HTMLDivElement | null>(null);
 
   const liveAccess = sandboxJob?.result?.access ?? null;
   const liveAccessUrl = liveAccess?.url ?? null;
   const isEmbeddedAccess = liveAccess?.mode === 'embedded' && Boolean(liveAccessUrl);
+
+  useEffect(() => {
+    const updateFullscreenState = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+
+    document.addEventListener('fullscreenchange', updateFullscreenState);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', updateFullscreenState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sandboxJob?.jobId || !isEmbeddedAccess || sandboxJob.result?.session.status !== 'ready') {
+      return;
+    }
+
+    let cancelled = false;
+
+    const sendHeartbeat = async () => {
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) {
+        return;
+      }
+
+      try {
+        const heartbeatResponse = await fetch(`/api/sandbox/browser/${sandboxJob.jobId}/heartbeat`, {
+          method: 'POST',
+        });
+        const heartbeatJob = (await heartbeatResponse.json()) as BrowserSandboxJob | { message?: string };
+
+        if (!cancelled && heartbeatResponse.ok && 'jobId' in heartbeatJob) {
+          setSandboxJob(heartbeatJob);
+        }
+      } catch {
+        return;
+      }
+    };
+
+    const heartbeatTimer = window.setInterval(() => {
+      void sendHeartbeat();
+    }, LIVE_SESSION_HEARTBEAT_INTERVAL_MS);
+
+    const handleFocus = () => {
+      void sendHeartbeat();
+    };
+
+    document.addEventListener('visibilitychange', handleFocus);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(heartbeatTimer);
+      document.removeEventListener('visibilitychange', handleFocus);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [isEmbeddedAccess, sandboxJob?.jobId, sandboxJob?.result?.session.status]);
 
   const handleLaunchSandbox = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -72,6 +134,20 @@ export function BrowserSandbox() {
     }
   };
 
+  const handleToggleFullscreen = async () => {
+    const container = liveBrowserContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+
+    await container.requestFullscreen();
+  };
+
   const pollSandboxJob = async (jobId: string) => {
     for (let attempt = 0; attempt < SANDBOX_MAX_POLL_ATTEMPTS; attempt += 1) {
       const jobResponse = await fetch(`/api/sandbox/browser/${jobId}`, {
@@ -118,7 +194,7 @@ export function BrowserSandbox() {
             </button>
             <button
               type="button"
-              disabled={!sandboxJob || sandboxJob.status !== 'running'}
+              disabled={!sandboxJob || (sandboxJob.status !== 'running' && sandboxJob.result?.session.status !== 'ready')}
               onClick={handleStopSandbox}
               className="cli-button w-full py-3 flex items-center justify-center"
             >
@@ -272,13 +348,30 @@ export function BrowserSandbox() {
                 <MonitorSmartphone className="mr-2" size={18} /> Live Remote Browser
               </h3>
               <div className="text-xs opacity-70 mb-3">
-                This embedded console is the live noVNC session running on the server. Keyboard and mouse input stay remote.
+                This embedded console is the live noVNC session running on the server. If the page is left inactive, the server closes the live session after {LIVE_SESSION_IDLE_TIMEOUT_MINUTES} minutes.
               </div>
-              <div className="border border-cyber-red-dim bg-black/60 min-h-[720px]">
+              <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <label className="flex flex-col gap-2 text-xs uppercase tracking-wider lg:min-w-80">
+                  <span>Viewport Height: {iframeHeight}px</span>
+                  <input
+                    type="range"
+                    min={480}
+                    max={1080}
+                    step={40}
+                    value={iframeHeight}
+                    onChange={(event) => setIframeHeight(Number(event.target.value))}
+                  />
+                </label>
+                <button type="button" className="cli-button px-4 py-2 text-xs md:text-sm" onClick={() => void handleToggleFullscreen()}>
+                  {isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
+                </button>
+              </div>
+              <div ref={liveBrowserContainerRef} className="border border-cyber-red-dim bg-black/60 min-h-[720px]">
                 <iframe
                   title="Live remote browser session"
                   src={liveAccessUrl ?? undefined}
-                  className="w-full min-h-[720px] bg-black"
+                  className="w-full bg-black"
+                  style={{ minHeight: `${iframeHeight}px`, height: `${iframeHeight}px` }}
                   allow="clipboard-read; clipboard-write"
                 />
               </div>

@@ -565,6 +565,79 @@ describe('backend app', () => {
     expect(response.body.result.status).toBe('stopped');
   });
 
+  it('renews a browser sandbox live session heartbeat by id', async () => {
+    const app = createApp({
+      touchBrowserSandboxJob: async () => ({
+        jobId: 'sandbox_job_123',
+        status: 'completed',
+        requestedUrl: 'https://example.org/',
+        expiresAt: '2026-04-11T12:15:00.000Z',
+        session: {
+          provider: 'local-novnc',
+          sessionId: 'sandbox_job_123',
+          status: 'ready',
+          startedAt: '2026-04-11T12:00:00.000Z',
+          stoppedAt: null,
+          runtime: {
+            displayNumber: 101,
+            vncPort: 5901,
+            novncPort: 7601,
+            sessionDirectory: 'storage/sandbox-sessions/sandbox_job_123',
+          },
+          access: {
+            mode: 'embedded',
+            url: 'https://fred.syntrix.ae/novnc/7601/vnc.html?autoconnect=1&resize=remote',
+            note: 'Live Chromium access is exposed through the local-novnc provider.',
+          },
+        },
+        result: {
+          originalUrl: 'https://example.org/',
+          finalUrl: 'https://example.org/',
+          title: 'Example Domain',
+          session: {
+            provider: 'local-novnc',
+            sessionId: 'sandbox_job_123',
+            status: 'ready',
+            startedAt: '2026-04-11T12:00:00.000Z',
+            stoppedAt: null,
+            runtime: {
+              displayNumber: 101,
+              vncPort: 5901,
+              novncPort: 7601,
+              sessionDirectory: 'storage/sandbox-sessions/sandbox_job_123',
+            },
+            access: {
+              mode: 'embedded',
+              url: 'https://fred.syntrix.ae/novnc/7601/vnc.html?autoconnect=1&resize=remote',
+              note: 'Live Chromium access is exposed through the local-novnc provider.',
+            },
+          },
+          access: {
+            mode: 'embedded',
+            url: 'https://fred.syntrix.ae/novnc/7601/vnc.html?autoconnect=1&resize=remote',
+            note: 'Live Chromium access is exposed through the local-novnc provider.',
+          },
+          screenshotPath: null,
+          tracePath: null,
+          redirectChain: ['https://example.org/'],
+          requestedDomains: ['example.org'],
+          scriptUrls: [],
+          consoleErrors: [],
+          downloads: [],
+          artifacts: [],
+          status: 'completed',
+          error: null,
+        },
+      }),
+    });
+
+    const response = await request(app).post('/api/sandbox/browser/sandbox_job_123/heartbeat');
+
+    expect(response.status).toBe(200);
+    expect(response.body.session.status).toBe('ready');
+    expect(response.body.result.access.mode).toBe('embedded');
+  });
+
   it('creates a file analysis job and returns its initial state', async () => {
     const app = createApp({
       enqueueFileAnalysisJob: async (files) => ({

@@ -1,13 +1,25 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createBrowserSandboxJob } from './services/browser-sandbox.js';
+import { appConfig } from './config.js';
+import {
+  clearBrowserSandboxStateForTesting,
+  createBrowserSandboxJob,
+  enqueueBrowserSandboxJob,
+  getBrowserSandboxJob,
+  setLiveSessionIdleTimeoutForTesting,
+} from './services/browser-sandbox.js';
 
 const previousAccessMode = process.env.BROWSER_SANDBOX_ACCESS_MODE;
 const previousAccessBaseUrl = process.env.BROWSER_SANDBOX_ACCESS_BASE_URL;
 const previousAccessPathTemplate = process.env.BROWSER_SANDBOX_ACCESS_PATH_TEMPLATE;
+const previousBrowserSandboxConfig = { ...appConfig.browserSandbox };
 
 describe('createBrowserSandboxJob', () => {
   afterEach(() => {
+    vi.useRealTimers();
+    clearBrowserSandboxStateForTesting();
+    Object.assign(appConfig.browserSandbox, previousBrowserSandboxConfig);
+
     if (previousAccessMode === undefined) {
       delete process.env.BROWSER_SANDBOX_ACCESS_MODE;
     } else {
@@ -198,4 +210,65 @@ describe('createBrowserSandboxJob', () => {
     expect(job.result?.access.url).toBe('https://sandbox.example.test/live/sessions/job_test_456');
     expect(job.session?.status).toBe('ready');
   });
+
+  it('auto-stops a live session after five minutes without heartbeats', async () => {
+    Object.assign(appConfig.browserSandbox, {
+      provider: 'local-novnc',
+      accessMode: 'embedded',
+      accessBaseUrl: null,
+      accessUrlTemplate: 'https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote',
+      accessPathTemplate: ':jobId',
+      startCommandTemplate: null,
+      stopCommandTemplate: null,
+    });
+    setLiveSessionIdleTimeoutForTesting(25);
+
+    await enqueueBrowserSandboxJob(
+      'https://example.org',
+      async (url, context) => ({
+        finalUrl: url,
+        title: 'Example Domain',
+        session: context.session,
+        access: context.session.access,
+        screenshotPath: null,
+        tracePath: null,
+        redirectChain: [url],
+        requestedDomains: ['example.org'],
+        scriptUrls: [],
+        consoleErrors: [],
+        downloads: [],
+        artifacts: [],
+        status: 'completed',
+        error: null,
+      }),
+      () => 'idle_timeout_job_123',
+    );
+
+    await waitForJobState('idle_timeout_job_123', (job) => job?.status === 'completed' && job.session?.status === 'ready');
+    await waitForJobState('idle_timeout_job_123', (job) => job?.session?.status === 'stopped');
+
+    const expiredJob = await getBrowserSandboxJob('idle_timeout_job_123');
+    expect(expiredJob?.status).toBe('completed');
+    expect(expiredJob?.session?.status).toBe('stopped');
+    expect(expiredJob?.result?.status).toBe('completed');
+    expect(expiredJob?.result?.error).toBeNull();
+  });
 });
+
+async function waitForJobState(
+  jobId: string,
+  predicate: (job: Awaited<ReturnType<typeof getBrowserSandboxJob>>) => boolean,
+  timeoutMs = 250,
+) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const job = await getBrowserSandboxJob(jobId);
+    if (predicate(job)) {
+      return job;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  return getBrowserSandboxJob(jobId);
+}

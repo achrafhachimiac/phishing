@@ -19,6 +19,7 @@ import {
   enqueueBrowserSandboxJob,
   getBrowserSandboxJob,
   stopBrowserSandboxJob,
+  touchBrowserSandboxJob,
 } from './services/browser-sandbox.js';
 import { analyzeEmail } from './services/email-analysis.js';
 import { EmailParsingError, parseRawEmail } from './services/email-parser.js';
@@ -35,6 +36,7 @@ type AppDependencies = {
   enqueueBrowserSandboxJob?: typeof enqueueBrowserSandboxJob;
   getBrowserSandboxJob?: typeof getBrowserSandboxJob;
   stopBrowserSandboxJob?: typeof stopBrowserSandboxJob;
+  touchBrowserSandboxJob?: typeof touchBrowserSandboxJob;
   enqueueFileAnalysisJob?: typeof enqueueFileAnalysisJob;
   getFileAnalysisJob?: typeof getFileAnalysisJob;
 };
@@ -49,6 +51,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   const enqueueBrowserSandboxHandler = dependencies.enqueueBrowserSandboxJob ?? enqueueBrowserSandboxJob;
   const getBrowserSandboxJobHandler = dependencies.getBrowserSandboxJob ?? getBrowserSandboxJob;
   const stopBrowserSandboxJobHandler = dependencies.stopBrowserSandboxJob ?? stopBrowserSandboxJob;
+  const touchBrowserSandboxJobHandler = dependencies.touchBrowserSandboxJob ?? touchBrowserSandboxJob;
   const enqueueFileAnalysisHandler = dependencies.enqueueFileAnalysisJob ?? enqueueFileAnalysisJob;
   const getFileAnalysisJobHandler = dependencies.getFileAnalysisJob ?? getFileAnalysisJob;
   const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
@@ -243,6 +246,19 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.post('/api/sandbox/browser/:jobId/stop', async (request, response) => {
     const job = await stopBrowserSandboxJobHandler(request.params.jobId);
+    if (!job) {
+      response.status(404).json({
+        error: 'not_found',
+        message: 'Browser sandbox job not found',
+      });
+      return;
+    }
+
+    response.status(200).json(job);
+  });
+
+  app.post('/api/sandbox/browser/:jobId/heartbeat', async (request, response) => {
+    const job = await touchBrowserSandboxJobHandler(request.params.jobId);
     if (!job) {
       response.status(404).json({
         error: 'not_found',
