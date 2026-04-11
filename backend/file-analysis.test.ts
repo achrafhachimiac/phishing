@@ -123,9 +123,11 @@ describe('createFileAnalysisJob', () => {
 
     expect(queuedJob.status).toBe('queued');
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const completedJob = await getFileAnalysisJob('job_file_789');
+    let completedJob = await getFileAnalysisJob('job_file_789');
+    for (let index = 0; index < 20 && completedJob?.status === 'running'; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      completedJob = await getFileAnalysisJob('job_file_789');
+    }
 
     expect(completedJob).toEqual(
       expect.objectContaining({
