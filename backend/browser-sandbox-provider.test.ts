@@ -69,4 +69,42 @@ describe('buildBrowserSandboxAccess', () => {
 
     expect(access.url).toBe('http://109.199.125.137:7612/vnc.html?autoconnect=1&resize=remote');
   });
+
+  it('auto-injects the WebSocket path for proxied noVNC URLs', () => {
+    const access = buildBrowserSandboxAccess(
+      {
+        provider: 'local-novnc',
+        accessMode: 'embedded',
+        accessBaseUrl: null,
+        accessUrlTemplate: 'https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote',
+        accessPathTemplate: ':jobId',
+      },
+      {
+        jobId: 'sandbox_ws_01',
+        novncPort: 7665,
+      },
+    );
+
+    expect(access.url).toBe(
+      'https://fred.syntrix.ae/novnc/7665/vnc.html?autoconnect=1&resize=remote&path=novnc%2F7665%2Fwebsockify',
+    );
+  });
+
+  it('preserves an explicit path parameter in the noVNC URL template', () => {
+    const access = buildBrowserSandboxAccess(
+      {
+        provider: 'local-novnc',
+        accessMode: 'embedded',
+        accessBaseUrl: null,
+        accessUrlTemplate: 'https://example.test/novnc/:novncPort/vnc.html?autoconnect=1&path=custom/ws',
+        accessPathTemplate: ':jobId',
+      },
+      {
+        jobId: 'sandbox_ws_02',
+        novncPort: 7700,
+      },
+    );
+
+    expect(access.url).toBe('https://example.test/novnc/7700/vnc.html?autoconnect=1&path=custom/ws');
+  });
 });

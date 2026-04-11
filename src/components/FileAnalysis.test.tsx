@@ -126,6 +126,5 @@ describe('FileAnalysis', () => {
     expect(screen.getByText(/specialized parsers/i)).toBeInTheDocument();
     expect(screen.getByText(/detected code \/ snippets/i)).toBeInTheDocument();
     expect(screen.getByText(/app.alert\("phish"\)/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /storage\/uploads\/file_job_123\/00-invoice.pdf/i })).toHaveAttribute('href', '/storage/uploads/file_job_123/00-invoice.pdf');
   });
 });

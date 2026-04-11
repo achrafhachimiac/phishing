@@ -53,11 +53,39 @@ export function buildBrowserSandboxAccess(
 }
 
 function interpolateAccessTemplate(template: string, context: BrowserSandboxProviderContext) {
-  return template
+  let url = template
     .replaceAll(':jobId', encodeURIComponent(context.jobId))
     .replaceAll(':displayNumber', String(context.displayNumber ?? ''))
     .replaceAll(':vncPort', String(context.vncPort ?? ''))
     .replaceAll(':novncPort', String(context.novncPort ?? ''));
+
+  url = ensureNoVncWebSocketPath(url);
+
+  return url;
+}
+
+/**
+ * noVNC's vnc.html client opens a WebSocket to a `path` query parameter
+ * (default: "websockify").  When the page is served through a reverse-proxy
+ * sub-path such as `/novnc/<port>/vnc.html`, the WebSocket must target the
+ * same sub-path (`/novnc/<port>/websockify`).  If the template author omits
+ * the `path` parameter we derive it automatically from the URL pathname so
+ * that proxied setups work out of the box.
+ */
+function ensureNoVncWebSocketPath(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.pathname.endsWith('/vnc.html') || parsed.searchParams.has('path')) {
+      return url;
+    }
+    const directory = parsed.pathname.replace(/\/vnc\.html$/, '').replace(/^\/+/, '');
+    if (directory) {
+      parsed.searchParams.set('path', `${directory}/websockify`);
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 function composeBrowserSandboxAccessUrl(baseUrl: string, pathTemplate: string, jobId: string) {

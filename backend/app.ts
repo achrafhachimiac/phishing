@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -59,6 +60,34 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.use(express.json({ limit: '2mb' }));
 
+  const authUser = process.env.APP_AUTH_USERNAME?.trim();
+  const authPass = process.env.APP_AUTH_PASSWORD?.trim();
+  if (authUser && authPass) {
+    app.use((request, response, next) => {
+      const header = request.headers.authorization;
+      if (!header || !header.startsWith('Basic ')) {
+        response.setHeader('WWW-Authenticate', 'Basic realm="Phish Hunter"');
+        response.status(401).json({ error: 'unauthorized', message: 'Authentication required.' });
+        return;
+      }
+      const decoded = Buffer.from(header.slice(6), 'base64').toString();
+      const [user, ...passParts] = decoded.split(':');
+      const pass = passParts.join(':');
+      const userBuf = Buffer.from(user);
+      const passBuf = Buffer.from(pass);
+      const expectedUserBuf = Buffer.from(authUser);
+      const expectedPassBuf = Buffer.from(authPass);
+      const userMatch = userBuf.length === expectedUserBuf.length && timingSafeEqual(userBuf, expectedUserBuf);
+      const passMatch = passBuf.length === expectedPassBuf.length && timingSafeEqual(passBuf, expectedPassBuf);
+      if (!userMatch || !passMatch) {
+        response.setHeader('WWW-Authenticate', 'Basic realm="Phish Hunter"');
+        response.status(401).json({ error: 'unauthorized', message: 'Invalid credentials.' });
+        return;
+      }
+      next();
+    });
+  }
+
   app.get('/api/health', (_request, response) => {
     const payload = healthResponseSchema.parse({
       status: 'ok',
@@ -69,8 +98,6 @@ export function createApp(dependencies: AppDependencies = {}) {
 
     response.status(200).json(payload);
   });
-
-  app.use('/storage', express.static(ensureStorageDirectories().root));
 
   if (fs.existsSync(clientEntryPath)) {
     app.use(express.static(clientDistPath));
@@ -275,7 +302,7 @@ export function createApp(dependencies: AppDependencies = {}) {
       const payload = fileAnalysisRequestSchema.parse(request.body);
       const job = await enqueueFileAnalysisHandler(payload.files);
 
-      response.status(202).json(job);
+      response.status(202).json(redactFileJob(job));
     } catch (error) {
       if (error instanceof FileAnalysisError) {
         response.status(400).json({
@@ -310,11 +337,11 @@ export function createApp(dependencies: AppDependencies = {}) {
       return;
     }
 
-    response.status(200).json(job);
+    response.status(200).json(redactFileJob(job));
   });
 
   if (fs.existsSync(clientEntryPath)) {
-    app.get(/^(?!\/api(?:\/|$))(?!\/storage(?:\/|$)).*/, (_request, response) => {
+    app.get(/^(?!\/api(?:\/|$)).*/, (_request, response) => {
       response.sendFile(clientEntryPath);
     });
   }
@@ -327,4 +354,16 @@ export function createApp(dependencies: AppDependencies = {}) {
   });
 
   return app;
+}
+
+function redactFileJob(job: { results?: Array<{ storagePath?: string | null; artifacts?: Array<{ path?: string }> }> }) {
+  if (!job.results) return job;
+  return {
+    ...job,
+    results: job.results.map((r) => ({
+      ...r,
+      storagePath: null,
+      artifacts: (r.artifacts ?? []).map((a) => ({ ...a, path: '' })),
+    })),
+  };
 }

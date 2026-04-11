@@ -66,6 +66,7 @@ sleep 1
 start_if_missing "${CHROMIUM_PID_FILE}" env DISPLAY="${DISPLAY}" "${CHROMIUM_BIN}" \
   --user-data-dir="${RUNTIME_DIR}/chromium-profile" \
   --no-first-run \
+  --no-sandbox \
   --disable-dev-shm-usage \
   --disable-gpu \
   --window-size=1440,900 \

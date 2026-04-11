@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
-import { AlertOctagon, Cpu, ExternalLink, FileArchive, Upload } from 'lucide-react';
+import { AlertOctagon, Cpu, FileArchive, Upload } from 'lucide-react';
 
 import type { FileAnalysisJob, FileUpload } from '../../shared/analysis-types';
-import { isPreviewableImage, toStorageUrl } from './storage-assets';
 
 const FILE_ANALYSIS_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const FILE_ANALYSIS_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
@@ -160,13 +159,7 @@ export function FileAnalysis() {
                       <div>Summary: {result.summary}</div>
                       <div>SHA256: {result.sha256}</div>
                       <div>Risk Score: {result.riskScore}</div>
-                      <div>
-                        Stored At: {toStorageUrl(result.storagePath) ? (
-                          <a href={toStorageUrl(result.storagePath) || '#'} target="_blank" rel="noreferrer" className="text-cyber-red underline inline-flex items-center gap-1 break-all">
-                            {result.storagePath} <ExternalLink size={12} />
-                          </a>
-                        ) : (result.storagePath || 'Unavailable')}
-                      </div>
+
                       <div>VirusTotal: {result.externalScans.virustotal.status}</div>
                       <div>ClamAV: {clamav.status}{clamav.signature ? ` (${clamav.signature})` : ''}</div>
                       <div>YARA: {yara.status}{yara.rules.length ? ` (${yara.rules.join(', ')})` : ''}</div>
@@ -216,22 +209,10 @@ export function FileAnalysis() {
                       <div>
                         <div className="text-xs opacity-70 uppercase mb-2">Artifacts</div>
                         {artifacts.length ? artifacts.map((artifact) => {
-                          const href = toStorageUrl(artifact.path);
                           return (
                             <div key={`${artifact.type}-${artifact.path}`} className="border border-cyber-red-dim bg-black/40 p-2 mb-2">
                               <div className="font-bold uppercase">{artifact.type}</div>
-                              {href ? (
-                                <a href={href} target="_blank" rel="noreferrer" className="text-cyber-red underline inline-flex items-center gap-1 break-all">
-                                  {artifact.label} <ExternalLink size={12} />
-                                </a>
-                              ) : (
-                                <div>{artifact.label}</div>
-                              )}
-                              {isPreviewableImage(artifact.path, artifact.mimeType) && href ? (
-                                <a href={href} target="_blank" rel="noreferrer" className="block mt-3">
-                                  <img src={href} alt={artifact.label} className="max-h-40 w-full object-contain border border-cyber-red-dim bg-black/50" />
-                                </a>
-                              ) : null}
+                              <div>{artifact.label}</div>
                             </div>
                           );
                         }) : <div className="opacity-70">No artifacts available</div>}
