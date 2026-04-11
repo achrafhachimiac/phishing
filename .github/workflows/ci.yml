@@ -61,6 +61,7 @@ jobs:
       DEPLOY_APP_NAME: ${{ vars.APP_NAME || 'phishing' }}
       DEPLOY_APP_PORT: ${{ vars.APP_PORT || '4000' }}
       DEPLOY_ENV_PATH: /tmp/phishing.env
+      APP_ENV_FILE_CONTENT: ${{ secrets.APP_ENV_FILE }}
 
     steps:
       - name: Checkout repository
@@ -82,9 +83,10 @@ jobs:
           ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
       - name: Write production env file
-        if: ${{ secrets.APP_ENV_FILE != '' }}
         run: |
-          printf '%s' '${{ secrets.APP_ENV_FILE }}' > app.env
+          if [ -n "$APP_ENV_FILE_CONTENT" ]; then
+            printf '%s' "$APP_ENV_FILE_CONTENT" > app.env
+          fi
 
       - name: Upload deployment assets
         run: |
@@ -96,13 +98,18 @@ jobs:
 
       - name: Deploy on remote host
         run: |
+          ENV_FILE_ARG=""
+          if [ -n "$APP_ENV_FILE_CONTENT" ]; then
+            ENV_FILE_ARG="ENV_FILE_PATH=$DEPLOY_ENV_PATH"
+          fi
+
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "chmod +x /tmp/phishing-remote-deploy.sh && \
             APP_NAME=$DEPLOY_APP_NAME \
             APP_DIR=$DEPLOY_APP_DIR \
             SERVICE_NAME=$DEPLOY_SERVICE_NAME \
             PORT=$DEPLOY_APP_PORT \
-            ENV_FILE_PATH=${{ secrets.APP_ENV_FILE != '' && '/tmp/phishing.env' || '' }} \
+            $ENV_FILE_ARG \
             ENABLE_LOCAL_BROWSER_SANDBOX=1 \
             RELEASE_ARCHIVE=/tmp/phishing-release.tgz \
             /tmp/phishing-remote-deploy.sh"
