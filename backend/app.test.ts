@@ -1,7 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
+import { appConfig } from './config.js';
 
 describe('backend app', () => {
   it('returns health status and storage paths', async () => {
@@ -20,6 +24,34 @@ describe('backend app', () => {
         traces: expect.any(String),
       }),
     );
+  });
+
+  it('serves the frontend entrypoint from the release dist directory', async () => {
+    const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
+    const clientEntryPath = path.join(clientDistPath, 'index.html');
+    const originalIndexHtml = fs.existsSync(clientEntryPath)
+      ? fs.readFileSync(clientEntryPath, 'utf8')
+      : null;
+    const testIndexHtml = '<!doctype html><html><body><div>frontend regression test</div></body></html>';
+
+    fs.mkdirSync(clientDistPath, { recursive: true });
+    fs.writeFileSync(clientEntryPath, testIndexHtml, 'utf8');
+
+    try {
+      const app = createApp();
+
+      const response = await request(app).get('/');
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toContain('text/html');
+      expect(response.text).toContain('frontend regression test');
+    } finally {
+      if (originalIndexHtml === null) {
+        fs.rmSync(clientEntryPath, { force: true });
+      } else {
+        fs.writeFileSync(clientEntryPath, originalIndexHtml, 'utf8');
+      }
+    }
   });
 
   it('returns a typed 404 payload for unknown routes', async () => {
