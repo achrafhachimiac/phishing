@@ -75,6 +75,7 @@ describe('analyzeEmail', () => {
           certificateTransparency: {
             certificateCount: 0,
             observedSubdomains: [],
+            observedCertificates: [],
           },
         },
         reputation: {

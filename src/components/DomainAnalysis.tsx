@@ -129,16 +129,6 @@ export function DomainAnalysis() {
             </div>
 
             <div className="mt-4 pt-4 border-t border-cyber-red-dim text-sm">
-              <div className="opacity-70 uppercase mb-2 flex items-center"><Server size={14} className="mr-2" /> TLS Snapshot</div>
-              <div className="space-y-1">
-                <div>Subject: {results.infrastructure.tls?.subject || 'Unavailable'}</div>
-                <div>Issuer: {results.infrastructure.tls?.issuer || 'Unavailable'}</div>
-                <div>Valid To: {results.infrastructure.tls?.validTo ? new Date(results.infrastructure.tls.validTo).toLocaleString() : 'Unavailable'}</div>
-                <div>SANs: {results.infrastructure.tls?.subjectAltNames.join(', ') || 'Unavailable'}</div>
-              </div>
-            </div>
-
-            <div className="mt-4 pt-4 border-t border-cyber-red-dim text-sm">
               <div className="opacity-70 uppercase mb-2">Mail Security</div>
               <div className="space-y-1">
                 <div>SPF Mode: {results.mailSecurity.spf.mode || 'Unavailable'}</div>
@@ -190,8 +180,39 @@ export function DomainAnalysis() {
               <div>Wayback Snapshots: {results.history.waybackSnapshots}</div>
               <div>First Seen: {results.history.firstSeen ? new Date(results.history.firstSeen).toLocaleString() : 'Unavailable'}</div>
               <div>Last Seen: {results.history.lastSeen ? new Date(results.history.lastSeen).toLocaleString() : 'Unavailable'}</div>
-              <div>CT Certificates: {results.certificates.certificateTransparency.certificateCount}</div>
-              <div>Observed Subdomains: {results.certificates.certificateTransparency.observedSubdomains.join(', ') || 'None observed'}</div>
+            </div>
+
+            <div className="cli-border p-4 text-sm space-y-4">
+              <h3 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4 flex items-center">
+                <Server size={16} className="mr-2" /> Certificate Evidence
+              </h3>
+              <div className="border border-cyber-red-dim p-3 bg-black/30 space-y-1">
+                <div className="opacity-70 uppercase text-xs">Live TLS Snapshot</div>
+                <div>Subject: {results.infrastructure.tls?.subject || 'Unavailable'}</div>
+                <div>Issuer: {results.infrastructure.tls?.issuer || 'Unavailable'}</div>
+                <div>Valid From: {results.infrastructure.tls?.validFrom ? new Date(results.infrastructure.tls.validFrom).toLocaleString() : 'Unavailable'}</div>
+                <div>Valid To: {results.infrastructure.tls?.validTo ? new Date(results.infrastructure.tls.validTo).toLocaleString() : 'Unavailable'}</div>
+                <div>SANs: {results.infrastructure.tls?.subjectAltNames.join(', ') || 'Unavailable'}</div>
+              </div>
+              <div className="space-y-2">
+                <div>CT Certificates: {results.certificates.certificateTransparency.certificateCount}</div>
+                <div>Observed Subdomains: {results.certificates.certificateTransparency.observedSubdomains.join(', ') || 'None observed'}</div>
+              </div>
+              <div className="space-y-3">
+                {(results.certificates.certificateTransparency.observedCertificates ?? []).length ? (
+                  (results.certificates.certificateTransparency.observedCertificates ?? []).map((certificate, index) => (
+                    <div key={`${certificate.commonName || 'certificate'}-${certificate.loggedAt || index}`} className="border border-cyber-red-dim p-3 bg-black/40 space-y-1">
+                      <div className="font-bold break-all">{certificate.commonName || 'Observed certificate'}</div>
+                      <div>Issuer: {certificate.issuerName || 'Unavailable'}</div>
+                      <div>Logged At: {certificate.loggedAt ? new Date(certificate.loggedAt).toLocaleString() : 'Unavailable'}</div>
+                      <div>Validity: {certificate.notBefore ? new Date(certificate.notBefore).toLocaleDateString() : 'Unknown'} - {certificate.notAfter ? new Date(certificate.notAfter).toLocaleDateString() : 'Unknown'}</div>
+                      <div>Domains: {certificate.domains.join(', ') || 'Unavailable'}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="opacity-70">No certificate-transparency entries were returned.</div>
+                )}
+              </div>
             </div>
 
             <div className="cli-border p-4 text-sm space-y-2">

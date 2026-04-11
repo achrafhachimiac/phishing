@@ -98,6 +98,14 @@ export const domainHistorySchema = z.object({
 export const domainCertificateTransparencySchema = z.object({
   certificateCount: z.number().int().nonnegative(),
   observedSubdomains: z.array(z.string()),
+  observedCertificates: z.array(z.object({
+    commonName: z.string().nullable(),
+    issuerName: z.string().nullable(),
+    loggedAt: z.string().nullable(),
+    notBefore: z.string().nullable(),
+    notAfter: z.string().nullable(),
+    domains: z.array(z.string()),
+  })),
 });
 
 export const domainCertificatesSchema = z.object({
@@ -398,6 +406,7 @@ export const fileParserReportSchema = z.object({
   parser: z.enum(['pdf', 'office-openxml', 'archive', 'pe', 'script', 'generic']),
   summary: z.string(),
   details: z.array(z.string()),
+  snippets: z.array(z.string()).default([]),
 });
 
 export const fileExternalScanSchema = z.object({

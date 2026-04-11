@@ -123,6 +123,7 @@ describe('backend app', () => {
           certificateTransparency: {
             certificateCount: 0,
             observedSubdomains: [],
+            observedCertificates: [],
           },
         },
         reputation: {
@@ -329,6 +330,7 @@ describe('backend app', () => {
                 certificateTransparency: {
                   certificateCount: 0,
                   observedSubdomains: [],
+                  observedCertificates: [],
                 },
               },
               reputation: {
@@ -692,6 +694,7 @@ describe('backend app', () => {
                 parser: 'pdf',
                 summary: 'PDF parser found 1 object(s) and 0 auto-action marker(s).',
                 details: ['Embedded URLs: 1'],
+                snippets: [],
               },
             ],
             riskScore: 20,

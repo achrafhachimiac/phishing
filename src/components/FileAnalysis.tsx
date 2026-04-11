@@ -5,7 +5,7 @@ import type { FileAnalysisJob, FileUpload } from '../../shared/analysis-types';
 import { isPreviewableImage, toStorageUrl } from './storage-assets';
 
 const FILE_ANALYSIS_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
-const FILE_ANALYSIS_MAX_POLL_ATTEMPTS = 8;
+const FILE_ANALYSIS_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
 
 export function FileAnalysis() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -49,7 +49,9 @@ export function FileAnalysis() {
   };
 
   const pollFileAnalysisJob = async (jobId: string) => {
-    for (let attempt = 0; attempt < FILE_ANALYSIS_MAX_POLL_ATTEMPTS; attempt += 1) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < FILE_ANALYSIS_MAX_POLL_DURATION_MS) {
       const jobResponse = await fetch(`/api/analyze/files/${jobId}`, {
         method: 'GET',
       });
@@ -198,6 +200,16 @@ export function FileAnalysis() {
                                 <div key={detail}>{detail}</div>
                               ))}
                             </div>
+                            {(report.snippets ?? []).length ? (
+                              <div className="mt-3">
+                                <div className="text-xs opacity-70 uppercase mb-2">Detected Code / Snippets</div>
+                                <div className="space-y-2">
+                                  {(report.snippets ?? []).map((snippet) => (
+                                    <pre key={snippet} className="overflow-x-auto whitespace-pre-wrap border border-cyber-red-dim bg-black/70 p-2 text-xs opacity-90">{snippet}</pre>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
                         )) : <div className="opacity-70">No parser reports</div>}
                       </div>

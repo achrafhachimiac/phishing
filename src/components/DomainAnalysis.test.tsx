@@ -83,6 +83,16 @@ describe('DomainAnalysis', () => {
           certificateTransparency: {
             certificateCount: 4,
             observedSubdomains: ['www.secure-example.test', 'mail.secure-example.test'],
+            observedCertificates: [
+              {
+                commonName: 'secure-example.test',
+                issuerName: 'Test CA',
+                loggedAt: '2026-04-01T00:00:00.000Z',
+                notBefore: '2026-04-01T00:00:00.000Z',
+                notAfter: '2026-07-01T00:00:00.000Z',
+                domains: ['secure-example.test', 'www.secure-example.test'],
+              },
+            ],
           },
         },
         reputation: {
@@ -142,13 +152,15 @@ describe('DomainAnalysis', () => {
       }));
     });
 
-    expect(await screen.findByText('secure-example.test')).toBeInTheDocument();
+    expect((await screen.findAllByText('secure-example.test')).length).toBeGreaterThan(0);
     expect(screen.getByText(/recently created domain with suspicious keyword patterns/i)).toBeInTheDocument();
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('Test Registrar')).toBeInTheDocument();
     expect(screen.getByText(/spf mode/i)).toBeInTheDocument();
     expect(screen.getByText(/ashburn, us/i)).toBeInTheDocument();
     expect(screen.getByText(/wayback snapshots/i)).toBeInTheDocument();
+    expect(screen.getByText(/certificate evidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/domains: secure-example.test, www.secure-example.test/i)).toBeInTheDocument();
     expect(screen.getByText(/otx pulses/i)).toBeInTheDocument();
     expect(screen.getByText(/urlhaus host: listed/i)).toBeInTheDocument();
   }, 10000);

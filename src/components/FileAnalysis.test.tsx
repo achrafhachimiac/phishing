@@ -81,6 +81,7 @@ describe('FileAnalysis', () => {
                   parser: 'pdf',
                   summary: 'PDF parser found 1 object(s) and 1 auto-action marker(s).',
                   details: ['Embedded URLs: 1', 'JavaScript markers: present'],
+                  snippets: ['1 0 obj << /JavaScript /JS (app.alert("phish")) >>'],
                 },
               ],
               artifacts: [
@@ -123,6 +124,8 @@ describe('FileAnalysis', () => {
     expect(screen.getByText(/clamav: malicious/i)).toBeInTheDocument();
     expect(screen.getByText(/yara: match/i)).toBeInTheDocument();
     expect(screen.getByText(/specialized parsers/i)).toBeInTheDocument();
+    expect(screen.getByText(/detected code \/ snippets/i)).toBeInTheDocument();
+    expect(screen.getByText(/app.alert\("phish"\)/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /storage\/uploads\/file_job_123\/00-invoice.pdf/i })).toHaveAttribute('href', '/storage/uploads/file_job_123/00-invoice.pdf');
   });
 });

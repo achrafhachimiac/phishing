@@ -14,6 +14,12 @@ describe('analyzeDomain', () => {
         caa: ['0 issue "letsencrypt.org"'],
         soa: `ns1.${domain} hostmaster.${domain} 2026040801 7200 3600 1209600 3600`,
       })),
+      resolveMailSecurityRecords: vi.fn(async () => ({
+        apexTxtRecords: ['v=spf1 -all'],
+        dmarcTxtRecords: [],
+        mtaStsTxtRecords: [],
+        tlsRptTxtRecords: [],
+      })),
       lookupRdap: vi.fn(async () => ({
         registrar: 'NameCheap, Inc.',
         createdAt: '2026-04-07T00:00:00.000Z',
@@ -45,6 +51,16 @@ describe('analyzeDomain', () => {
       lookupCertificateTransparency: vi.fn(async () => ({
         certificateCount: 2,
         observedSubdomains: ['www.secure-login-update.com', 'mail.secure-login-update.com'],
+        observedCertificates: [
+          {
+            commonName: 'secure-login-update.com',
+            issuerName: 'Test CA',
+            loggedAt: '2026-04-07T00:00:00.000Z',
+            notBefore: '2026-04-07T00:00:00.000Z',
+            notAfter: '2026-07-07T00:00:00.000Z',
+            domains: ['secure-login-update.com', 'www.secure-login-update.com'],
+          },
+        ],
       })),
       lookupReputation: vi.fn(async () => ({
         alienVault: {

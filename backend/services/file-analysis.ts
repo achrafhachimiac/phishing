@@ -304,6 +304,7 @@ async function buildParserReports(context: {
         `Detected type: ${context.detectedType}`,
         `Extracted URLs: ${context.extractedUrls.length}`,
       ],
+      snippets: [],
     });
   }
 
@@ -314,6 +315,7 @@ function buildPdfParserReport(buffer: Buffer, extractedUrls: string[]): FilePars
   const content = buffer.toString('latin1');
   const objectCount = (content.match(/\b\d+\s+\d+\s+obj\b/g) ?? []).length;
   const autoActions = ['/OpenAction', '/Launch', '/AA'].filter((token) => content.includes(token));
+  const snippets = extractSnippetMatches(content, [/\/JavaScript/gi, /\/JS/gi, /\/OpenAction/gi, /\/Launch/gi], 180);
 
   return {
     parser: 'pdf',
@@ -323,6 +325,7 @@ function buildPdfParserReport(buffer: Buffer, extractedUrls: string[]): FilePars
       `JavaScript markers: ${/\/JavaScript|\/JS/i.test(content) ? 'present' : 'absent'}`,
       `Auto actions: ${autoActions.length ? autoActions.join(', ') : 'none'}`,
     ],
+    snippets,
   };
 }
 
@@ -331,6 +334,7 @@ async function buildArchiveParserReport(buffer: Buffer, detectedType: string): P
     const zip = await JSZip.loadAsync(buffer);
     const entryNames = Object.keys(zip.files).slice(0, 12);
     const details = [`Entries: ${entryNames.length}`];
+    const snippets: string[] = [];
     if (entryNames.length) {
       details.push(`Sample entries: ${entryNames.join(', ')}`);
     }
@@ -338,6 +342,10 @@ async function buildArchiveParserReport(buffer: Buffer, detectedType: string): P
     const macroEntry = entryNames.find((entryName) => /vbaProject\.bin/i.test(entryName));
     if (macroEntry) {
       details.push(`Macro payload: ${macroEntry}`);
+      const macroBuffer = await zip.file(macroEntry)?.async('nodebuffer');
+      if (macroBuffer) {
+        snippets.push(...extractPrintableMacroSnippets(macroBuffer));
+      }
     }
 
     const relCandidates = Object.values(zip.files).filter((entry) => entry.name.endsWith('.rels')).slice(0, 4);
@@ -345,6 +353,7 @@ async function buildArchiveParserReport(buffer: Buffer, detectedType: string): P
       const content = await candidate.async('text');
       if (/TargetMode="External"|https?:\/\//i.test(content)) {
         details.push(`External relationship found in ${candidate.name}`);
+        snippets.push(...extractSnippetMatches(content, [/TargetMode="External"/gi, /https?:\/\/[^\s"']+/gi], 160));
       }
     }
 
@@ -352,12 +361,14 @@ async function buildArchiveParserReport(buffer: Buffer, detectedType: string): P
       parser: detectedType === 'office-openxml' ? 'office-openxml' : 'archive',
       summary: `${detectedType === 'office-openxml' ? 'Office OpenXML' : 'Archive'} parser inspected ${Object.keys(zip.files).length} container entr${Object.keys(zip.files).length === 1 ? 'y' : 'ies'}.`,
       details,
+      snippets: snippets.slice(0, 5),
     };
   } catch (error) {
     return {
       parser: detectedType === 'office-openxml' ? 'office-openxml' : 'archive',
       summary: 'Archive parser could not fully inspect the container.',
       details: [error instanceof Error ? error.message : 'Unknown archive parsing error'],
+      snippets: [],
     };
   }
 }
@@ -392,11 +403,13 @@ function buildPeParserReport(buffer: Buffer): FileParserReport {
     parser: 'pe',
     summary: 'PE parser inspected DOS and NT headers.',
     details,
+    snippets: [],
   };
 }
 
 function buildScriptParserReport(buffer: Buffer, extension: string | null): FileParserReport {
-  const content = buffer.toString('utf8').toLowerCase();
+  const scriptContent = buffer.toString('utf8');
+  const normalizedContent = scriptContent.toLowerCase();
   const markers = [
     'eval(',
     'frombase64string',
@@ -404,12 +417,13 @@ function buildScriptParserReport(buffer: Buffer, extension: string | null): File
     'wscript.shell',
     'activexobject',
     'powershell -enc',
-  ].filter((marker) => content.includes(marker));
+  ].filter((marker) => normalizedContent.includes(marker));
 
   return {
     parser: 'script',
     summary: `Script parser inspected ${extension ?? 'unknown'} content and found ${markers.length} suspicious marker(s).`,
     details: markers.length ? markers.map((marker) => `Marker: ${marker}`) : ['No high-risk script markers found.'],
+    snippets: extractSuspiciousScriptSnippets(scriptContent, markers),
   };
 }
 
@@ -754,6 +768,57 @@ function detectFileType(buffer: Buffer, extension: string | null) {
 function extractUrls(buffer: Buffer) {
   const content = buffer.toString('utf8');
   return [...new Set(content.match(/https?:\/\/[^\s<>"']+/gi) ?? [])];
+}
+
+function extractSnippetMatches(content: string, patterns: RegExp[], radius: number) {
+  const snippets: string[] = [];
+
+  for (const pattern of patterns) {
+    for (const match of content.matchAll(pattern)) {
+      if (typeof match.index !== 'number') {
+        continue;
+      }
+
+      const start = Math.max(0, match.index - radius);
+      const end = Math.min(content.length, match.index + match[0].length + radius);
+      const snippet = content.slice(start, end).replace(/\s+/g, ' ').trim();
+      if (snippet) {
+        snippets.push(snippet);
+      }
+      if (snippets.length >= 5) {
+        return [...new Set(snippets)];
+      }
+    }
+  }
+
+  return [...new Set(snippets)];
+}
+
+function extractSuspiciousScriptSnippets(content: string, markers: string[]) {
+  const lines = content.split(/\r?\n/);
+  const snippets: string[] = [];
+
+  for (const marker of markers) {
+    const matchingLine = lines.find((line) => line.toLowerCase().includes(marker));
+    if (matchingLine) {
+      snippets.push(matchingLine.trim());
+    }
+  }
+
+  return [...new Set(snippets)].slice(0, 5);
+}
+
+function extractPrintableMacroSnippets(buffer: Buffer) {
+  const suspiciousMarkers = ['AutoOpen', 'Document_Open', 'Shell', 'CreateObject', 'WScript', 'PowerShell', 'http', 'cmd.exe'];
+
+  return buffer
+    .toString('latin1')
+    .replace(/[^\x20-\x7e\r\n\t]+/g, ' ')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 8)
+    .filter((line) => suspiciousMarkers.some((marker) => line.toLowerCase().includes(marker.toLowerCase())))
+    .slice(0, 5);
 }
 
 function shellEscape(value: string) {

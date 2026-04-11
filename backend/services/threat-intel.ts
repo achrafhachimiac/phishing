@@ -40,6 +40,14 @@ export type DomainHistoryResult = {
 export type DomainCertificateTransparencyResult = {
   certificateCount: number;
   observedSubdomains: string[];
+  observedCertificates: Array<{
+    commonName: string | null;
+    issuerName: string | null;
+    loggedAt: string | null;
+    notBefore: string | null;
+    notAfter: string | null;
+    domains: string[];
+  }>;
 };
 
 export type DomainReputationResult = {
@@ -296,38 +304,95 @@ export async function lookupDomainHistory(domain: string): Promise<DomainHistory
 
 export async function lookupCertificateTransparency(domain: string): Promise<DomainCertificateTransparencyResult> {
   try {
-    const response = await fetch(`https://crt.sh/?q=${encodeURIComponent(`%.${domain}`)}&output=json`, {
-      headers: {
-        accept: 'application/json',
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!response.ok) {
-      return {
-        certificateCount: 0,
-        observedSubdomains: [],
-      };
-    }
-
-    const payload = (await response.json()) as Array<{ name_value?: string }>;
+    const payloads = await Promise.all([
+      fetchCertificateTransparencyEntries(domain),
+      fetchCertificateTransparencyEntries(`%.${domain}`),
+    ]);
+    const mergedEntries = deduplicateCertificateTransparencyEntries(payloads.flat());
     const observedSubdomains = [...new Set(
-      payload
-        .flatMap((entry) => (entry.name_value ?? '').split('\n'))
-        .map((value) => value.trim().toLowerCase())
+      mergedEntries
+        .flatMap((entry) => extractCertificateDomains(entry))
         .filter((value) => value.endsWith(domain) && value !== domain),
     )].slice(0, 25);
+    const observedCertificates = mergedEntries.slice(0, 25).map((entry) => ({
+      commonName: normalizeCertificateValue(entry.common_name) ?? firstOrNull(extractCertificateDomains(entry)),
+      issuerName: normalizeCertificateValue(entry.issuer_name),
+      loggedAt: normalizeCertificateValue(entry.entry_timestamp) ?? normalizeCertificateValue(entry.logged_at),
+      notBefore: normalizeCertificateValue(entry.not_before),
+      notAfter: normalizeCertificateValue(entry.not_after),
+      domains: extractCertificateDomains(entry).slice(0, 20),
+    }));
 
     return {
-      certificateCount: payload.length,
+      certificateCount: mergedEntries.length,
       observedSubdomains,
+      observedCertificates,
     };
   } catch {
     return {
       certificateCount: 0,
       observedSubdomains: [],
+      observedCertificates: [],
     };
   }
+}
+
+async function fetchCertificateTransparencyEntries(query: string) {
+  const response = await fetch(`https://crt.sh/?q=${encodeURIComponent(query)}&output=json`, {
+    headers: {
+      accept: 'application/json',
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!response.ok) {
+    return [] as Array<Record<string, string | number | null | undefined>>;
+  }
+
+  return (await response.json()) as Array<Record<string, string | number | null | undefined>>;
+}
+
+function deduplicateCertificateTransparencyEntries(entries: Array<Record<string, string | number | null | undefined>>) {
+  const seen = new Set<string>();
+
+  return entries.filter((entry) => {
+    const key = [
+      normalizeCertificateValue(entry.common_name),
+      normalizeCertificateValue(entry.issuer_name),
+      normalizeCertificateValue(entry.not_before),
+      normalizeCertificateValue(entry.not_after),
+      normalizeCertificateValue(entry.name_value),
+    ].join('|');
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function extractCertificateDomains(entry: Record<string, string | number | null | undefined>) {
+  return [...new Set(
+    String(entry.name_value ?? '')
+      .split('\n')
+      .map((value) => value.replace(/^\*\./, '').trim().toLowerCase())
+      .filter(Boolean),
+  )];
+}
+
+function normalizeCertificateValue(value: string | number | null | undefined) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function firstOrNull(values: string[]) {
+  return values[0] ?? null;
 }
 
 export async function lookupDomainReputation(domain: string, ips: string[]): Promise<DomainReputationResult> {

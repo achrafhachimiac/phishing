@@ -25,6 +25,7 @@ import {
 
 type AnalyzeDomainDependencies = {
   resolveDns?: (domain: string) => Promise<DomainDnsRecords>;
+  resolveMailSecurityRecords?: (domain: string) => Promise<MailSecurityRecords>;
   lookupRdap?: (domain: string) => Promise<DomainRdap>;
   inspectTls?: (domain: string) => Promise<DomainTls | null>;
   lookupIpIntelligence?: (ips: string[]) => Promise<DomainIpIntelligence[]>;
@@ -39,6 +40,13 @@ type CaaRecordLike = {
   issue?: string;
   issuewild?: string;
   iodef?: string;
+};
+
+type MailSecurityRecords = {
+  apexTxtRecords: string[];
+  dmarcTxtRecords: string[];
+  mtaStsTxtRecords: string[];
+  tlsRptTxtRecords: string[];
 };
 
 const execFileAsync = promisify(execFile);
@@ -58,6 +66,7 @@ export async function analyzeDomain(
 ): Promise<DomainAnalysisResponse> {
   const normalizedDomain = normalizeDomain(rawInput);
   const resolveDns = dependencies.resolveDns ?? defaultResolveDns;
+  const resolveMailSecurityRecords = dependencies.resolveMailSecurityRecords ?? defaultResolveMailSecurityRecords;
   const lookupRdap = dependencies.lookupRdap ?? defaultLookupRdap;
   const inspectTls = dependencies.inspectTls ?? defaultInspectTls;
   const lookupIpIntelligence = dependencies.lookupIpIntelligence ?? lookupDomainIpIntelligence;
@@ -66,8 +75,9 @@ export async function analyzeDomain(
   const lookupReputation = dependencies.lookupReputation ?? lookupDomainReputation;
   const now = dependencies.now ?? (() => new Date());
 
-  const [dnsRecords, rdap, tlsInfo] = await Promise.all([
+  const [dnsRecords, mailSecurityRecords, rdap, tlsInfo] = await Promise.all([
     resolveDns(normalizedDomain),
+    resolveMailSecurityRecords(normalizedDomain),
     lookupRdap(normalizedDomain),
     inspectTls(normalizedDomain),
   ]);
@@ -80,7 +90,7 @@ export async function analyzeDomain(
     lookupReputation(normalizedDomain, ipAddresses),
   ]);
 
-  const mailSecurity = buildMailSecurity(dnsRecords.txt);
+  const mailSecurity = buildMailSecurity(mailSecurityRecords);
 
   const riskFactors = buildRiskFactors(normalizedDomain, dnsRecords, rdap, mailSecurity, reputation, now());
   const score = calculateScore(riskFactors);
@@ -454,11 +464,27 @@ function extractSubjectAltNames(value: string | undefined): string[] {
     .map((entry) => entry.slice(4));
 }
 
-function buildMailSecurity(txtRecords: string[]): DomainMailSecurity {
-  const spfRecord = txtRecords.find((entry) => entry.toLowerCase().startsWith('v=spf1')) ?? null;
-  const dmarcRecord = txtRecords.find((entry) => entry.toLowerCase().startsWith('v=dmarc1')) ?? null;
-  const mtaStsRecord = txtRecords.find((entry) => entry.toLowerCase().includes('v=stsv1')) ?? null;
-  const tlsRptRecord = txtRecords.find((entry) => entry.toLowerCase().includes('v=tlsrptv1')) ?? null;
+async function defaultResolveMailSecurityRecords(domain: string): Promise<MailSecurityRecords> {
+  const [apexTxtRecords, dmarcTxtRecords, mtaStsTxtRecords, tlsRptTxtRecords] = await Promise.all([
+    resolveTxtRecords(domain),
+    resolveTxtRecords(`_dmarc.${domain}`),
+    resolveTxtRecords(`_mta-sts.${domain}`),
+    resolveTxtRecords(`_smtp._tls.${domain}`),
+  ]);
+
+  return {
+    apexTxtRecords,
+    dmarcTxtRecords,
+    mtaStsTxtRecords,
+    tlsRptTxtRecords,
+  };
+}
+
+function buildMailSecurity(records: MailSecurityRecords): DomainMailSecurity {
+  const spfRecord = records.apexTxtRecords.find((entry) => entry.toLowerCase().startsWith('v=spf1')) ?? null;
+  const dmarcRecord = records.dmarcTxtRecords.find((entry) => entry.toLowerCase().startsWith('v=dmarc1')) ?? null;
+  const mtaStsRecord = records.mtaStsTxtRecords.find((entry) => entry.toLowerCase().includes('v=stsv1')) ?? null;
+  const tlsRptRecord = records.tlsRptTxtRecords.find((entry) => entry.toLowerCase().includes('v=tlsrptv1')) ?? null;
 
   return {
     spf: {
@@ -483,7 +509,7 @@ function buildMailSecurity(txtRecords: string[]): DomainMailSecurity {
 }
 
 function extractTagValue(record: string, tag: string): string | null {
-  const match = record.match(new RegExp(`${tag}=([^;\s]+)`, 'i'));
+  const match = record.match(new RegExp(`${tag}=([^;\\s]+)`, 'i'));
   return match?.[1] ?? null;
 }
 
