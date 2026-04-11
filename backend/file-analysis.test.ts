@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import JSZip from 'jszip';
 
-import { createFileAnalysisJob } from './services/file-analysis.js';
+import { createFileAnalysisJob, enqueueFileAnalysisJob, getFileAnalysisJob } from './services/file-analysis.js';
 
 describe('createFileAnalysisJob', () => {
   it('rejects uploads without a filename', async () => {
@@ -102,6 +102,42 @@ describe('createFileAnalysisJob', () => {
       expect.arrayContaining([
         expect.objectContaining({ kind: 'office_macro' }),
       ]),
+    );
+  });
+
+  it('marks queued jobs as failed when async post-processing rejects unexpectedly', async () => {
+    const queuedJob = await enqueueFileAnalysisJob(
+      [
+        {
+          filename: 'invoice.pdf',
+          contentBase64: Buffer.from('%PDF-1.7\n1 0 obj\n/JavaScript\n').toString('base64'),
+          contentType: 'application/pdf',
+        },
+      ],
+      undefined,
+      async () => ({
+        status: 'invalid',
+      } as never),
+      () => 'job_file_789',
+    );
+
+    expect(queuedJob.status).toBe('queued');
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const completedJob = await getFileAnalysisJob('job_file_789');
+
+    expect(completedJob).toEqual(
+      expect.objectContaining({
+        jobId: 'job_file_789',
+        status: 'failed',
+      }),
+    );
+    expect(completedJob?.results[0]).toEqual(
+      expect.objectContaining({
+        filename: 'invoice.pdf',
+        summary: expect.stringContaining('Invalid input'),
+      }),
     );
   });
 });

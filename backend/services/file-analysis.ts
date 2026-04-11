@@ -59,7 +59,11 @@ export async function enqueueFileAnalysisJob(
 
   fileAnalysisJobs.set(jobId, queuedJob);
   queueMicrotask(async () => {
-    await runFileAnalysisJob(jobId, normalizedFiles, analyzeUploadedFile, enrichFileWithThreatIntel);
+    try {
+      await runFileAnalysisJob(jobId, normalizedFiles, analyzeUploadedFile, enrichFileWithThreatIntel);
+    } catch (error) {
+      fileAnalysisJobs.set(jobId, buildFailedFileAnalysisJob(jobId, normalizedFiles, error));
+    }
   });
 
   return queuedJob;
@@ -265,6 +269,41 @@ async function runFileAnalysisJob(
       results,
     }),
   );
+}
+
+function buildFailedFileAnalysisJob(jobId: string, files: FileUpload[], error: unknown): FileAnalysisJob {
+  const message = error instanceof Error ? error.message : 'File analysis failed unexpectedly.';
+
+  return fileAnalysisJobSchema.parse({
+    jobId,
+    status: 'failed',
+    queuedFiles: files.map((file) => file.filename),
+    results: files.map((file) => {
+      const decoded = safeDecode(file.contentBase64);
+
+      return {
+        filename: file.filename,
+        contentType: file.contentType ?? null,
+        detectedType: 'unknown',
+        extension: extractExtension(file.filename),
+        size: decoded?.byteLength ?? 0,
+        sha256: decoded ? createHash('sha256').update(decoded).digest('hex') : '',
+        extractedUrls: [],
+        indicators: [],
+        parserReports: [],
+        riskScore: 0,
+        verdict: 'clean',
+        summary: message,
+        storagePath: null,
+        artifacts: [],
+        externalScans: {
+          virustotal: emptyVirusTotalScan(),
+          clamav: emptyClamAvScan('unavailable'),
+          yara: emptyYaraScan('unavailable'),
+        },
+      };
+    }),
+  });
 }
 
 export async function lookupFileThreatIntel(_hash: string): Promise<FileExternalScan['virustotal']> {
