@@ -163,6 +163,53 @@ describe('createBrowserSandboxJob', () => {
     expect(job.result?.artifacts).toHaveLength(2);
   });
 
+  it('accepts a bare hostname and normalizes it to https', async () => {
+    const job = await createBrowserSandboxJob(
+      'example.org/login',
+      async (url) => ({
+        finalUrl: url,
+        title: 'Example Domain',
+        session: {
+          provider: 'local-chromium',
+          sessionId: 'job_test_789',
+          status: 'unavailable',
+          startedAt: '2026-04-11T18:00:00.000Z',
+          stoppedAt: null,
+          runtime: {
+            displayNumber: 122,
+            vncPort: 5922,
+            novncPort: 7622,
+            sessionDirectory: 'storage/sandbox-sessions/job_test_789',
+          },
+          access: {
+            mode: 'none',
+            url: null,
+            note: 'Interactive access is not enabled on this provider yet.',
+          },
+        },
+        access: {
+          mode: 'none',
+          url: null,
+          note: 'Interactive access is not enabled on this provider yet.',
+        },
+        screenshotPath: null,
+        tracePath: null,
+        redirectChain: [url],
+        requestedDomains: ['example.org'],
+        scriptUrls: [],
+        consoleErrors: [],
+        downloads: [],
+        artifacts: [],
+        status: 'completed',
+        error: null,
+      }),
+      () => 'job_test_789',
+    );
+
+    expect(job.requestedUrl).toBe('https://example.org/login');
+    expect(job.result?.originalUrl).toBe('https://example.org/login');
+  });
+
   it('preserves a live access url when the provider returns one', async () => {
     const job = await createBrowserSandboxJob(
       'https://example.org',

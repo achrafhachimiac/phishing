@@ -132,9 +132,13 @@ export function DomainAnalysis() {
               <div className="opacity-70 uppercase mb-2">Mail Security</div>
               <div className="space-y-1">
                 <div>SPF Mode: {results.mailSecurity.spf.mode || 'Unavailable'}</div>
+                <div className="break-all">SPF Record: {results.mailSecurity.spf.record || 'Unavailable'}</div>
                 <div>DMARC Policy: {results.mailSecurity.dmarc.policy || 'Unavailable'}</div>
+                <div className="break-all">DMARC Record: {results.mailSecurity.dmarc.record || 'Unavailable'}</div>
                 <div>MTA-STS: {results.mailSecurity.mtaSts.present ? 'Present' : 'Absent'}</div>
+                <div className="break-all">MTA-STS Record: {results.mailSecurity.mtaSts.record || 'Unavailable'}</div>
                 <div>TLS-RPT: {results.mailSecurity.tlsRpt.present ? 'Present' : 'Absent'}</div>
+                <div className="break-all">TLS-RPT Record: {results.mailSecurity.tlsRpt.record || 'Unavailable'}</div>
               </div>
             </div>
           </div>

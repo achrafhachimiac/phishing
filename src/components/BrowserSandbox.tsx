@@ -183,7 +183,7 @@ export function BrowserSandbox() {
           <input
             value={targetUrl}
             onChange={(event) => setTargetUrl(event.target.value)}
-            placeholder="https://suspicious.example/login"
+            placeholder="siteweb.com ou https://siteweb.com/login"
             className="cli-input w-full p-4 font-mono text-sm"
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

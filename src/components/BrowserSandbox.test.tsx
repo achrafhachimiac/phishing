@@ -93,7 +93,7 @@ describe('BrowserSandbox', () => {
 
     render(<BrowserSandbox />);
 
-    fireEvent.change(screen.getByPlaceholderText(/https:\/\/suspicious.example\/login/i), {
+    fireEvent.change(screen.getByPlaceholderText(/siteweb.com/i), {
       target: { value: 'https://example.org' },
     });
     fireEvent.click(screen.getByRole('button', { name: /launch sandbox/i }));

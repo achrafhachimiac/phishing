@@ -470,9 +470,12 @@ function buildBrowserSandboxArtifacts(
 }
 
 function normalizePublicUrl(value: string) {
+  const trimmedValue = value.trim();
+  const candidateUrl = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmedValue) ? trimmedValue : `https://${trimmedValue}`;
+
   let parsedUrl: URL;
   try {
-    parsedUrl = new URL(value);
+    parsedUrl = new URL(candidateUrl);
   } catch {
     throw new BrowserSandboxError('invalid_url_target', 'The sandbox target URL is invalid.');
   }

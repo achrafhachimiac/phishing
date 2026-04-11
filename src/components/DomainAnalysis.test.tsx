@@ -41,17 +41,17 @@ describe('DomainAnalysis', () => {
             mode: '-all',
           },
           dmarc: {
-            present: false,
-            record: null,
-            policy: null,
+            present: true,
+            record: 'v=DMARC1; p=quarantine; pct=100; rua=mailto:dmarc_monitoring@secure-example.test; ruf=mailto:dmarc_forensics@secure-example.test; ri=86400',
+            policy: 'quarantine',
           },
           mtaSts: {
-            present: false,
-            record: null,
+            present: true,
+            record: 'v=STSv1; id=20260411T000000',
           },
           tlsRpt: {
-            present: false,
-            record: null,
+            present: true,
+            record: 'v=TLSRPTv1; rua=mailto:tlsrpt@secure-example.test',
           },
         },
         infrastructure: {
@@ -157,6 +157,9 @@ describe('DomainAnalysis', () => {
     expect(screen.getAllByText('203.0.113.10').length).toBeGreaterThan(0);
     expect(screen.getByText('Test Registrar')).toBeInTheDocument();
     expect(screen.getByText(/spf mode/i)).toBeInTheDocument();
+    expect(screen.getByText(/spf record: v=spf1 -all/i)).toBeInTheDocument();
+    expect(screen.getByText(/dmarc policy: quarantine/i)).toBeInTheDocument();
+    expect(screen.getByText(/dmarc record: v=DMARC1; p=quarantine; pct=100; rua=mailto:dmarc_monitoring@secure-example.test; ruf=mailto:dmarc_forensics@secure-example.test; ri=86400/i)).toBeInTheDocument();
     expect(screen.getByText(/ashburn, us/i)).toBeInTheDocument();
     expect(screen.getByText(/wayback snapshots/i)).toBeInTheDocument();
     expect(screen.getByText(/certificate evidence/i)).toBeInTheDocument();
