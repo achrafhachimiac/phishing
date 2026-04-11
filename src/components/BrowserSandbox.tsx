@@ -13,6 +13,10 @@ export function BrowserSandbox() {
   const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState('');
 
+  const liveAccess = sandboxJob?.result?.access ?? null;
+  const liveAccessUrl = liveAccess?.url ?? null;
+  const isEmbeddedAccess = liveAccess?.mode === 'embedded' && Boolean(liveAccessUrl);
+
   const handleLaunchSandbox = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!targetUrl) {
@@ -165,10 +169,17 @@ export function BrowserSandbox() {
                   <div className="border border-cyber-red-dim p-2 bg-black/40">
                     <div className="text-xs opacity-70 uppercase mb-1">Provider Note</div>
                     <div>{sandboxJob.result.access.note || 'No provider note.'}</div>
-                    {sandboxJob.result.access.url ? (
-                      <a href={sandboxJob.result.access.url} target="_blank" rel="noreferrer" className="text-cyber-red underline inline-flex items-center mt-2">
-                        Open Remote Browser <ExternalLink size={12} className="ml-1" />
-                      </a>
+                    {liveAccessUrl ? (
+                      <div className="mt-3 flex flex-col gap-3">
+                        <a href={liveAccessUrl} target="_blank" rel="noreferrer" className="cli-button inline-flex items-center justify-center px-4 py-2 text-xs md:text-sm w-full md:w-auto">
+                          Open Remote Browser <ExternalLink size={12} className="ml-2" />
+                        </a>
+                        {isEmbeddedAccess ? (
+                          <div className="text-xs opacity-70">
+                            Embedded analyst console is available below. Open in a separate tab if you need a larger viewport.
+                          </div>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
                   {sandboxJob.result.error && <div className="text-red-400">Error: {sandboxJob.result.error}</div>}
@@ -251,6 +262,25 @@ export function BrowserSandbox() {
                 ) : (
                   <p className="text-sm opacity-70">No artifacts were captured for this job.</p>
                 )}
+              </div>
+            </div>
+          ) : null}
+
+          {sandboxJob.result && isEmbeddedAccess ? (
+            <div className="cli-border p-4">
+              <h3 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4 flex items-center">
+                <MonitorSmartphone className="mr-2" size={18} /> Live Remote Browser
+              </h3>
+              <div className="text-xs opacity-70 mb-3">
+                This embedded console is the live noVNC session running on the server. Keyboard and mouse input stay remote.
+              </div>
+              <div className="border border-cyber-red-dim bg-black/60 min-h-[720px]">
+                <iframe
+                  title="Live remote browser session"
+                  src={liveAccessUrl ?? undefined}
+                  className="w-full min-h-[720px] bg-black"
+                  allow="clipboard-read; clipboard-write"
+                />
               </div>
             </div>
           ) : null}

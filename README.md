@@ -34,14 +34,15 @@ View your app in AI Studio: https://ai.studio/apps/87485238-a188-4a21-b9e7-8d703
 ### Browser sandbox provider notes
 
 - Default behavior: the backend runs a real Chromium/Playwright evidence collection flow server-side, but returns no live access URL.
-- To expose a live browser session through a separate gateway, set for example:
+- To expose a live browser session through the same domain with noVNC, set for example:
    - `BROWSER_SANDBOX_PROVIDER=local-novnc`
-   - `BROWSER_SANDBOX_ACCESS_MODE=external`
-   - `BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=http://109.199.125.137::novncPort/vnc.html?autoconnect=1&resize=remote`
+   - `BROWSER_SANDBOX_ACCESS_MODE=embedded`
+   - `BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote`
    - `BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :sessionDir`
    - `BROWSER_SANDBOX_STOP_COMMAND=bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId :sessionDir`
-- With that configuration, the app returns a clickable `access.url` per sandbox job and can start a local Xvfb + Chromium + x11vnc + noVNC stack on the same Linux host.
+- With that configuration, the app returns a clickable `access.url`, can render an embedded iframe analyst console, and can start a local Xvfb + Chromium + x11vnc + noVNC stack on the same Linux host.
 - The runtime allocates deterministic ports and session directories from each `jobId`, so the backend and the shell scripts resolve the same display, VNC port, and noVNC port without an external provider.
+- Nginx must proxy `/novnc/<port>/...` to `127.0.0.1:<port>` with websocket upgrade headers, otherwise the iframe link will exist but the live browser will not load.
 - To install the local runtime during deployment, set `ENABLE_LOCAL_BROWSER_SANDBOX=1` for the deploy script. This installs `xvfb`, `x11vnc`, `novnc`, `websockify`, and the Playwright Chromium binary on the server.
 
 ### Static file analysis notes
@@ -91,8 +92,8 @@ URLHAUS_AUTH_KEY=
 FILE_ANALYSIS_YARA_COMMAND=yara -r /opt/yara/rules/index.yar :path
 FILE_ANALYSIS_CLAMAV_COMMAND=clamscan --no-summary :path
 BROWSER_SANDBOX_PROVIDER=local-novnc
-BROWSER_SANDBOX_ACCESS_MODE=external
-BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=http://109.199.125.137::novncPort/vnc.html?autoconnect=1&resize=remote
+BROWSER_SANDBOX_ACCESS_MODE=embedded
+BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote
 BROWSER_SANDBOX_ACCESS_PATH_TEMPLATE=:jobId
 BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :sessionDir
 BROWSER_SANDBOX_STOP_COMMAND=bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId :sessionDir

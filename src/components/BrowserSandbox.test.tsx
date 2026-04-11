@@ -51,14 +51,14 @@ describe('BrowserSandbox', () => {
               startedAt: '2026-04-11T12:00:00.000Z',
               stoppedAt: null,
               access: {
-                mode: 'external',
-                url: 'https://sandbox.example.test/live/sessions/sandbox_job_123',
+                mode: 'embedded',
+                url: 'https://fred.syntrix.ae/novnc/6161/vnc.html?autoconnect=1&resize=remote',
                 note: 'Live Chromium access is exposed through the novnc provider.',
               },
             },
             access: {
-              mode: 'external',
-              url: 'https://sandbox.example.test/live/sessions/sandbox_job_123',
+              mode: 'embedded',
+              url: 'https://fred.syntrix.ae/novnc/6161/vnc.html?autoconnect=1&resize=remote',
               note: 'Live Chromium access is exposed through the novnc provider.',
             },
             screenshotPath: 'storage/sandbox-sessions/sandbox_job_123/example-org.png',
@@ -112,7 +112,9 @@ describe('BrowserSandbox', () => {
     expect(screen.getAllByText(/payload.iso/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/referenceerror: x is not defined/i)).toBeInTheDocument();
     expect(screen.getByText(/provider note/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /open remote browser/i })).toHaveAttribute('href', 'https://sandbox.example.test/live/sessions/sandbox_job_123');
+    expect(screen.getByRole('link', { name: /open remote browser/i })).toHaveAttribute('href', 'https://fred.syntrix.ae/novnc/6161/vnc.html?autoconnect=1&resize=remote');
+    expect(screen.getByRole('heading', { name: /live remote browser/i })).toBeInTheDocument();
+    expect(screen.getByTitle(/live remote browser session/i)).toHaveAttribute('src', 'https://fred.syntrix.ae/novnc/6161/vnc.html?autoconnect=1&resize=remote');
     expect(screen.getByAltText(/sandbox screenshot preview/i)).toHaveAttribute('src', '/storage/sandbox-sessions/sandbox_job_123/example-org.png');
     expect(screen.getByRole('link', { name: /stored copy/i })).toHaveAttribute('href', '/storage/downloads/sandbox_job_123/payload.iso');
   });
