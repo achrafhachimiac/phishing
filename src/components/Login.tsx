@@ -8,16 +8,36 @@ interface LoginProps {
 export function Login({ onLogin }: LoginProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simple hardcoded password for the prototype
-    if (password === 'Fr&dCl@ssic') {
-      onLogin();
-    } else {
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password }),
+      });
+
+      if (response.ok) {
+        setError(false);
+        setPassword('');
+        onLogin();
+        return;
+      }
+
       setError(true);
       setPassword('');
-      setTimeout(() => setError(false), 2000);
+      window.setTimeout(() => setError(false), 2000);
+    } catch {
+      setError(true);
+      window.setTimeout(() => setError(false), 2000);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -49,6 +69,7 @@ export function Login({ onLogin }: LoginProps) {
                 className="cli-input w-full py-2 pl-10 pr-4"
                 placeholder="••••••••"
                 autoFocus
+                disabled={isSubmitting}
               />
             </div>
             {error && (
@@ -58,8 +79,8 @@ export function Login({ onLogin }: LoginProps) {
             )}
           </div>
 
-          <button type="submit" className="cli-button w-full py-3 font-bold tracking-widest">
-            INITIALIZE SYSTEM
+          <button type="submit" disabled={isSubmitting || !password} className="cli-button w-full py-3 font-bold tracking-widest disabled:opacity-60">
+            {isSubmitting ? 'AUTHENTICATING...' : 'INITIALIZE SYSTEM'}
           </button>
         </form>
         

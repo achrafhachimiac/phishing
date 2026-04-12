@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -42,6 +42,9 @@ type AppDependencies = {
   getFileAnalysisJob?: typeof getFileAnalysisJob;
 };
 
+const AUTH_COOKIE_NAME = 'phish_hunter_session';
+const AUTH_SESSION_DURATION_MS = 12 * 60 * 60 * 1000;
+
 export function createApp(dependencies: AppDependencies = {}) {
   const app = express();
   const analyzeDomainHandler = dependencies.analyzeDomain ?? analyzeDomain;
@@ -57,36 +60,58 @@ export function createApp(dependencies: AppDependencies = {}) {
   const getFileAnalysisJobHandler = dependencies.getFileAnalysisJob ?? getFileAnalysisJob;
   const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
   const clientEntryPath = path.join(clientDistPath, 'index.html');
+  const accessPassword = getConfiguredAccessPassword();
+  const sessionSecret = getSessionSecret(accessPassword);
 
   app.use(express.json({ limit: '2mb' }));
 
-  const authUser = process.env.APP_AUTH_USERNAME?.trim();
-  const authPass = process.env.APP_AUTH_PASSWORD?.trim();
-  if (authUser && authPass) {
-    app.use((request, response, next) => {
-      const header = request.headers.authorization;
-      if (!header || !header.startsWith('Basic ')) {
-        response.setHeader('WWW-Authenticate', 'Basic realm="Phish Hunter"');
-        response.status(401).json({ error: 'unauthorized', message: 'Authentication required.' });
-        return;
-      }
-      const decoded = Buffer.from(header.slice(6), 'base64').toString();
-      const [user, ...passParts] = decoded.split(':');
-      const pass = passParts.join(':');
-      const userBuf = Buffer.from(user);
-      const passBuf = Buffer.from(pass);
-      const expectedUserBuf = Buffer.from(authUser);
-      const expectedPassBuf = Buffer.from(authPass);
-      const userMatch = userBuf.length === expectedUserBuf.length && timingSafeEqual(userBuf, expectedUserBuf);
-      const passMatch = passBuf.length === expectedPassBuf.length && timingSafeEqual(passBuf, expectedPassBuf);
-      if (!userMatch || !passMatch) {
-        response.setHeader('WWW-Authenticate', 'Basic realm="Phish Hunter"');
-        response.status(401).json({ error: 'unauthorized', message: 'Invalid credentials.' });
-        return;
-      }
+  app.post('/api/auth/login', (request, response) => {
+    if (!accessPassword || !sessionSecret) {
+      response.status(200).json({ authenticated: true });
+      return;
+    }
+
+    const password = typeof request.body?.password === 'string' ? request.body.password : '';
+    if (!matchesSecret(password, accessPassword)) {
+      response.status(401).json({ error: 'unauthorized', message: 'Invalid credentials.' });
+      return;
+    }
+
+    const token = createSessionToken(sessionSecret);
+    response.setHeader('Set-Cookie', buildSessionCookie(token));
+    response.status(200).json({ authenticated: true });
+  });
+
+  app.get('/api/auth/session', (request, response) => {
+    response.status(200).json({ authenticated: !sessionSecret || hasValidSession(request.headers.cookie, sessionSecret) });
+  });
+
+  app.get('/api/auth/verify', (request, response) => {
+    if (sessionSecret && !hasValidSession(request.headers.cookie, sessionSecret)) {
+      response.status(401).end();
+      return;
+    }
+
+    response.status(204).end();
+  });
+
+  app.post('/api/auth/logout', (_request, response) => {
+    if (sessionSecret) {
+      response.setHeader('Set-Cookie', clearSessionCookie());
+    }
+    response.status(204).end();
+  });
+
+  app.use('/storage', requireAuthenticatedSession(sessionSecret), express.static(ensureStorageDirectories().root));
+
+  app.use('/api', (request, response, next) => {
+    if (request.path.startsWith('/auth/')) {
       next();
-    });
-  }
+      return;
+    }
+
+    requireAuthenticatedSession(sessionSecret)(request, response, next);
+  });
 
   app.get('/api/health', (_request, response) => {
     const payload = healthResponseSchema.parse({
@@ -342,7 +367,7 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   if (fs.existsSync(clientEntryPath)) {
     app.get(/^(?!\/api(?:\/|$)).*/, (_request, response) => {
-      response.sendFile(clientEntryPath);
+      response.type('html').send(fs.readFileSync(clientEntryPath, 'utf8'));
     });
   }
 
@@ -354,6 +379,91 @@ export function createApp(dependencies: AppDependencies = {}) {
   });
 
   return app;
+}
+
+function getConfiguredAccessPassword() {
+  return process.env.APP_ACCESS_PASSWORD?.trim() || process.env.APP_AUTH_PASSWORD?.trim() || null;
+}
+
+function getSessionSecret(accessPassword: string | null) {
+  if (!accessPassword) {
+    return null;
+  }
+
+  return process.env.APP_SESSION_SECRET?.trim() || accessPassword;
+}
+
+function matchesSecret(candidate: string, expected: string) {
+  const candidateBuffer = Buffer.from(candidate);
+  const expectedBuffer = Buffer.from(expected);
+  return candidateBuffer.length === expectedBuffer.length && timingSafeEqual(candidateBuffer, expectedBuffer);
+}
+
+function parseCookieHeader(cookieHeader: string | undefined) {
+  return Object.fromEntries(
+    (cookieHeader ?? '')
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const separatorIndex = part.indexOf('=');
+        if (separatorIndex < 0) {
+          return [part, ''];
+        }
+
+        return [part.slice(0, separatorIndex), decodeURIComponent(part.slice(separatorIndex + 1))];
+      }),
+  );
+}
+
+function createSessionToken(secret: string) {
+  const payload = Buffer.from(JSON.stringify({ exp: Date.now() + AUTH_SESSION_DURATION_MS })).toString('base64url');
+  const signature = createHmac('sha256', secret).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function hasValidSession(cookieHeader: string | undefined, secret: string) {
+  const token = parseCookieHeader(cookieHeader)[AUTH_COOKIE_NAME];
+  if (!token) {
+    return false;
+  }
+
+  const [payload, providedSignature] = token.split('.');
+  if (!payload || !providedSignature) {
+    return false;
+  }
+
+  const expectedSignature = createHmac('sha256', secret).update(payload).digest('base64url');
+  if (!matchesSecret(providedSignature, expectedSignature)) {
+    return false;
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
+    return typeof decoded.exp === 'number' && decoded.exp > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function buildSessionCookie(token: string) {
+  const maxAgeSeconds = Math.floor(AUTH_SESSION_DURATION_MS / 1000);
+  return `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
+}
+
+function clearSessionCookie() {
+  return `${AUTH_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`;
+}
+
+function requireAuthenticatedSession(secret: string | null) {
+  return (request: express.Request, response: express.Response, next: express.NextFunction) => {
+    if (secret && !hasValidSession(request.headers.cookie, secret)) {
+      response.status(401).json({ error: 'unauthorized', message: 'Authentication required.' });
+      return;
+    }
+
+    next();
+  };
 }
 
 function redactFileJob(job: { results?: Array<{ storagePath?: string | null; artifacts?: Array<{ path?: string }> }> }) {

@@ -66,6 +66,65 @@ describe('backend app', () => {
     });
   });
 
+  it('protects API and storage with a single session cookie when an access password is configured', async () => {
+    const previousAccessPassword = process.env.APP_ACCESS_PASSWORD;
+    const previousSessionSecret = process.env.APP_SESSION_SECRET;
+    const protectedAssetDirectory = path.join(appConfig.storageRoot, 'sandbox-sessions', 'auth-session-test');
+    const protectedAssetPath = path.join(protectedAssetDirectory, 'shot.png');
+
+    process.env.APP_ACCESS_PASSWORD = 'Fr&dCl@ssic';
+    process.env.APP_SESSION_SECRET = 'session-secret-for-tests';
+    fs.mkdirSync(protectedAssetDirectory, { recursive: true });
+    fs.writeFileSync(protectedAssetPath, 'png', 'utf8');
+
+    try {
+      const app = createApp();
+
+      const unauthorizedHealth = await request(app).get('/api/health');
+      expect(unauthorizedHealth.status).toBe(401);
+
+      const loginResponse = await request(app)
+        .post('/api/auth/login')
+        .send({ password: 'Fr&dCl@ssic' });
+
+      expect(loginResponse.status).toBe(200);
+      const sessionCookie = loginResponse.headers['set-cookie']?.[0];
+      expect(sessionCookie).toContain('phish_hunter_session=');
+
+      const authorizedHealth = await request(app)
+        .get('/api/health')
+        .set('Cookie', sessionCookie as string);
+      expect(authorizedHealth.status).toBe(200);
+
+      const unauthorizedStorage = await request(app).get('/storage/sandbox-sessions/auth-session-test/shot.png');
+      expect(unauthorizedStorage.status).toBe(401);
+
+      const authorizedStorage = await request(app)
+        .get('/storage/sandbox-sessions/auth-session-test/shot.png')
+        .set('Cookie', sessionCookie as string);
+      expect(authorizedStorage.status).toBe(200);
+
+      const sessionProbe = await request(app)
+        .get('/api/auth/session')
+        .set('Cookie', sessionCookie as string);
+      expect(sessionProbe.body).toEqual({ authenticated: true });
+    } finally {
+      if (previousAccessPassword === undefined) {
+        delete process.env.APP_ACCESS_PASSWORD;
+      } else {
+        process.env.APP_ACCESS_PASSWORD = previousAccessPassword;
+      }
+
+      if (previousSessionSecret === undefined) {
+        delete process.env.APP_SESSION_SECRET;
+      } else {
+        process.env.APP_SESSION_SECRET = previousSessionSecret;
+      }
+
+      fs.rmSync(protectedAssetDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('returns a domain analysis payload for valid requests', async () => {
     const app = createApp({
       analyzeDomain: async (domain) => ({

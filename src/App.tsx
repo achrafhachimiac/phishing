@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Login } from './components/Login';
 import { DomainAnalysis } from './components/DomainAnalysis';
 import { EmailAnalysis } from './components/EmailAnalysis';
@@ -7,11 +7,55 @@ import { FileAnalysis } from './components/FileAnalysis';
 import { Terminal, Shield, LogOut } from 'lucide-react';
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking');
   const [activeTab, setActiveTab] = useState<'domain' | 'email' | 'sandbox' | 'files'>('domain');
 
-  if (!isLoggedIn) {
-    return <Login onLogin={() => setIsLoggedIn(true)} />;
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSession = async () => {
+      try {
+        const response = await fetch('/api/auth/session');
+        const payload = (await response.json()) as { authenticated?: boolean };
+        if (!cancelled) {
+          setAuthState(payload.authenticated ? 'authenticated' : 'unauthenticated');
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthState('unauthenticated');
+        }
+      }
+    };
+
+    void loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      setAuthState('unauthenticated');
+    }
+  };
+
+  if (authState === 'checking') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-cyber-bg text-cyber-red font-mono crt">
+        <div className="scanline"></div>
+        <div className="cli-border p-8 bg-black/80 relative z-10 text-center">
+          <Shield className="mx-auto mb-4 animate-pulse" size={36} />
+          <div className="tracking-widest uppercase">Restoring Secure Session...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (authState !== 'authenticated') {
+    return <Login onLogin={() => setAuthState('authenticated')} />;
   }
 
   return (
@@ -29,7 +73,9 @@ export default function App() {
           </div>
           
           <button 
-            onClick={() => setIsLoggedIn(false)}
+            onClick={() => {
+              void handleLogout();
+            }}
             className="cli-button px-4 py-2 text-xs flex items-center"
           >
             <LogOut size={14} className="mr-2" /> TERMINATE SESSION

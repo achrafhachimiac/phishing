@@ -148,7 +148,7 @@ main() {
   # Wait for the Node process to bind its port
   local retries=10
   while [ $retries -gt 0 ]; do
-    if curl --fail --silent "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1; then
+    if curl --fail --silent "http://127.0.0.1:${PORT}/api/auth/session" >/dev/null 2>&1; then
       break
     fi
     retries=$((retries - 1))
