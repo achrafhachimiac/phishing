@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseRawEmail } from './services/email-parser.js';
+import { parseRawEmail, parseRawEmailForAnalysis } from './services/email-parser.js';
 
 const sampleRawEmail = `Return-Path: <bounce@mailer.secure-example.test>
 From: Alerts Team <alerts@secure-example.test>
@@ -46,5 +46,45 @@ describe('parseRawEmail', () => {
     await expect(parseRawEmail('   ')).rejects.toMatchObject({
       code: 'invalid_email',
     });
+  });
+
+  it('extracts attachment uploads for downstream file analysis', async () => {
+    const rawEmailWithAttachment = `From: Alerts Team <alerts@secure-example.test>
+To: victim@example.org
+Subject: Invoice attached
+Date: Tue, 08 Apr 2026 10:00:00 +0000
+Message-ID: <abc@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="frontier"
+
+--frontier
+Content-Type: text/plain; charset=UTF-8
+
+See attachment.
+
+--frontier
+Content-Type: application/pdf; name="invoice.pdf"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="invoice.pdf"
+
+JVBERi0xLjcKJSBzdXNwaWNpb3VzIHBkZg==
+--frontier--
+`;
+
+    const result = await parseRawEmailForAnalysis(rawEmailWithAttachment);
+
+    expect(result.parsedEmail.attachments).toEqual([
+      expect.objectContaining({
+        filename: 'invoice.pdf',
+        contentType: 'application/pdf',
+      }),
+    ]);
+    expect(result.attachmentUploads).toEqual([
+      expect.objectContaining({
+        filename: 'invoice.pdf',
+        contentType: 'application/pdf',
+      }),
+    ]);
+    expect(Buffer.from(result.attachmentUploads[0].contentBase64, 'base64').toString('latin1')).toContain('%PDF-1.7');
   });
 });

@@ -251,6 +251,40 @@ export const emailAnalysisResponseSchema = z.object({
   relatedDomains: z.array(relatedDomainSchema),
 });
 
+export const emlAnalysisRequestSchema = z.object({
+  filename: z.string().trim().min(1),
+  rawEmail: z.string().trim().min(1),
+});
+
+export const emlIgnoredAttachmentSchema = z.object({
+  filename: z.string().nullable(),
+  contentType: z.string(),
+  size: z.number().int().nonnegative(),
+  reason: z.enum([
+    'empty_attachment',
+    'duplicate_attachment',
+    'attachment_too_large',
+    'attachment_limit_exceeded',
+    'total_attachment_size_exceeded',
+  ]),
+});
+
+export const emlAnalysisJobSchema = z.object({
+  jobId: z.string(),
+  status: z.enum(['queued', 'parsing', 'analyzing_files', 'completed', 'failed']),
+  filename: z.string(),
+  emailAnalysis: emailAnalysisResponseSchema.nullable(),
+  attachmentCount: z.number().int().nonnegative(),
+  analyzedAttachmentCount: z.number().int().nonnegative(),
+  ignoredAttachments: z.array(emlIgnoredAttachmentSchema),
+  fileAnalysisJobId: z.string().nullable(),
+  attachmentResults: z.array(z.lazy(() => fileStaticAnalysisResultSchema)),
+  consolidatedThreatLevel: emailThreatLevelSchema.nullable(),
+  consolidatedRiskScore: z.number().int().min(0).max(100).nullable(),
+  executiveSummary: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
 export const urlAnalysisRequestSchema = z.object({
   urls: z.array(z.string().trim().min(1)).min(1),
 });
@@ -547,6 +581,9 @@ export type DomainReputation = z.infer<typeof domainReputationSchema>;
 export type EmailParsingRequest = z.infer<typeof emailParsingRequestSchema>;
 export type EmailParsingResponse = z.infer<typeof emailParsingResponseSchema>;
 export type EmailAnalysisResponse = z.infer<typeof emailAnalysisResponseSchema>;
+export type EmlAnalysisRequest = z.infer<typeof emlAnalysisRequestSchema>;
+export type EmlIgnoredAttachment = z.infer<typeof emlIgnoredAttachmentSchema>;
+export type EmlAnalysisJob = z.infer<typeof emlAnalysisJobSchema>;
 export type UrlAnalysisRequest = z.infer<typeof urlAnalysisRequestSchema>;
 export type UrlAnalysisResult = z.infer<typeof urlAnalysisResultSchema>;
 export type UrlAnalysisJob = z.infer<typeof urlAnalysisJobSchema>;

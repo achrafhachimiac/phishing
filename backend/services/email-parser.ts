@@ -1,6 +1,15 @@
 import { simpleParser, type Attachment } from 'mailparser';
 
-import { emailParsingResponseSchema, type EmailParsingResponse } from '../../shared/analysis-types.js';
+import {
+  emailParsingResponseSchema,
+  type EmailParsingResponse,
+  type FileUpload,
+} from '../../shared/analysis-types.js';
+
+export type ParsedEmailForAnalysis = {
+  parsedEmail: EmailParsingResponse;
+  attachmentUploads: FileUpload[];
+};
 
 export class EmailParsingError extends Error {
   code: string;
@@ -12,16 +21,25 @@ export class EmailParsingError extends Error {
 }
 
 export async function parseRawEmail(rawEmail: string): Promise<EmailParsingResponse> {
+  const parsed = await parseRawEmailWithAttachments(rawEmail);
+  return parsed.parsedEmail;
+}
+
+export async function parseRawEmailForAnalysis(rawEmail: string): Promise<ParsedEmailForAnalysis> {
+  return parseRawEmailWithAttachments(rawEmail);
+}
+
+async function parseRawEmailWithAttachments(rawEmail: string): Promise<ParsedEmailForAnalysis> {
   const trimmedEmail = rawEmail.trim();
 
   if (!trimmedEmail) {
     throw new EmailParsingError('invalid_email', 'Raw email is required.');
   }
 
-  const parsedEmail = await simpleParser(trimmedEmail);
-  const authenticationHeader = parsedEmail.headers.get('authentication-results');
-  const returnPathHeader = headerValue(parsedEmail.headers.get('return-path')) || extractHeader(trimmedEmail, 'return-path');
-  const combinedContent = [parsedEmail.text, parsedEmail.html]
+  const parsedMessage = await simpleParser(trimmedEmail);
+  const authenticationHeader = parsedMessage.headers.get('authentication-results');
+  const returnPathHeader = headerValue(parsedMessage.headers.get('return-path')) || extractHeader(trimmedEmail, 'return-path');
+  const combinedContent = [parsedMessage.text, parsedMessage.html]
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
     .join('\n');
 
@@ -36,13 +54,13 @@ export async function parseRawEmail(rawEmail: string): Promise<EmailParsingRespo
     decodedUrl: decodeUrl(url),
   }));
 
-  return emailParsingResponseSchema.parse({
+  const parsedEmail = emailParsingResponseSchema.parse({
     headers: {
-      from: extractAddressText(parsedEmail.from),
-      to: extractAddressText(parsedEmail.to),
-      subject: parsedEmail.subject || null,
-      date: parsedEmail.date?.toUTCString() || null,
-      messageId: headerValue(parsedEmail.headers.get('message-id')),
+      from: extractAddressText(parsedMessage.from),
+      to: extractAddressText(parsedMessage.to),
+      subject: parsedMessage.subject || null,
+      date: parsedMessage.date?.toUTCString() || null,
+      messageId: headerValue(parsedMessage.headers.get('message-id')),
       returnPath: returnPathHeader,
     },
     authentication: {
@@ -54,13 +72,49 @@ export async function parseRawEmail(rawEmail: string): Promise<EmailParsingRespo
     emailAddresses,
     domains,
     ipAddresses,
-    attachments: parsedEmail.attachments.map((attachment: Attachment) => ({
+    attachments: parsedMessage.attachments.map((attachment: Attachment) => ({
       filename: attachment.filename || null,
       contentType: attachment.contentType,
       size: attachment.size,
       checksum: attachment.checksum || null,
     })),
   });
+
+  return {
+    parsedEmail,
+    attachmentUploads: parsedMessage.attachments
+      .map((attachment, index) => attachmentToFileUpload(attachment, index))
+      .filter((attachment): attachment is FileUpload => attachment !== null),
+  };
+}
+
+function attachmentToFileUpload(attachment: Attachment, index: number): FileUpload | null {
+  const content = normalizeAttachmentContent(attachment.content);
+  if (!content || content.byteLength === 0) {
+    return null;
+  }
+
+  return {
+    filename: attachment.filename || `attachment-${index + 1}.bin`,
+    contentType: attachment.contentType || 'application/octet-stream',
+    contentBase64: content.toString('base64'),
+  };
+}
+
+function normalizeAttachmentContent(content: unknown): Buffer | null {
+  if (Buffer.isBuffer(content)) {
+    return content;
+  }
+
+  if (typeof content === 'string') {
+    return Buffer.from(content);
+  }
+
+  if (content instanceof Uint8Array) {
+    return Buffer.from(content);
+  }
+
+  return null;
 }
 
 function headerValue(value: unknown): string | null {

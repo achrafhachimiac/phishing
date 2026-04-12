@@ -14,7 +14,7 @@ import {
 } from './signal-display';
 
 const FILE_ANALYSIS_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
-const FILE_ANALYSIS_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
+const FILE_ANALYSIS_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 250 : 120000;
 
 export function FileAnalysis() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);

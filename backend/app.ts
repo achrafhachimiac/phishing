@@ -8,6 +8,7 @@ import { ZodError } from 'zod';
 import {
   browserSandboxRequestSchema,
   domainAnalysisRequestSchema,
+  emlAnalysisRequestSchema,
   emailParsingRequestSchema,
   fileAnalysisRequestSchema,
   healthResponseSchema,
@@ -22,6 +23,7 @@ import {
   stopBrowserSandboxJob,
   touchBrowserSandboxJob,
 } from './services/browser-sandbox.js';
+import { EmlAnalysisError, enqueueEmlAnalysisJob, getEmlAnalysisJob } from './services/eml-analysis.js';
 import { analyzeEmail } from './services/email-analysis.js';
 import { EmailParsingError, parseRawEmail } from './services/email-parser.js';
 import { enqueueFileAnalysisJob, FileAnalysisError, getFileAnalysisJob } from './services/file-analysis.js';
@@ -40,6 +42,8 @@ type AppDependencies = {
   touchBrowserSandboxJob?: typeof touchBrowserSandboxJob;
   enqueueFileAnalysisJob?: typeof enqueueFileAnalysisJob;
   getFileAnalysisJob?: typeof getFileAnalysisJob;
+  enqueueEmlAnalysisJob?: typeof enqueueEmlAnalysisJob;
+  getEmlAnalysisJob?: typeof getEmlAnalysisJob;
 };
 
 const AUTH_COOKIE_NAME = 'phish_hunter_session';
@@ -58,6 +62,8 @@ export function createApp(dependencies: AppDependencies = {}) {
   const touchBrowserSandboxJobHandler = dependencies.touchBrowserSandboxJob ?? touchBrowserSandboxJob;
   const enqueueFileAnalysisHandler = dependencies.enqueueFileAnalysisJob ?? enqueueFileAnalysisJob;
   const getFileAnalysisJobHandler = dependencies.getFileAnalysisJob ?? getFileAnalysisJob;
+  const enqueueEmlAnalysisHandler = dependencies.enqueueEmlAnalysisJob ?? enqueueEmlAnalysisJob;
+  const getEmlAnalysisJobHandler = dependencies.getEmlAnalysisJob ?? getEmlAnalysisJob;
   const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
   const clientEntryPath = path.join(clientDistPath, 'index.html');
   const accessPassword = getConfiguredAccessPassword();
@@ -208,6 +214,49 @@ export function createApp(dependencies: AppDependencies = {}) {
         message: 'Email analysis failed unexpectedly.',
       });
     }
+  });
+
+  app.post('/api/analyze/eml', async (request, response) => {
+    try {
+      const payload = emlAnalysisRequestSchema.parse(request.body);
+      const job = await enqueueEmlAnalysisHandler(payload.filename, payload.rawEmail);
+
+      response.status(202).json(job);
+    } catch (error) {
+      if (error instanceof EmlAnalysisError) {
+        response.status(400).json({
+          error: error.code,
+          message: error.message,
+        });
+        return;
+      }
+
+      if (error instanceof ZodError) {
+        response.status(400).json({
+          error: 'invalid_eml',
+          message: 'A filename and raw email content are required.',
+        });
+        return;
+      }
+
+      response.status(500).json({
+        error: 'eml_analysis_failed',
+        message: 'EML analysis job creation failed unexpectedly.',
+      });
+    }
+  });
+
+  app.get('/api/analyze/eml/:jobId', async (request, response) => {
+    const job = await getEmlAnalysisJobHandler(request.params.jobId);
+    if (!job) {
+      response.status(404).json({
+        error: 'not_found',
+        message: 'EML analysis job not found',
+      });
+      return;
+    }
+
+    response.status(200).json(job);
   });
 
   app.post('/api/analyze/urls', async (request, response) => {

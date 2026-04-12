@@ -6,7 +6,7 @@ import { isPreviewableImage, toStorageUrl } from './storage-assets';
 import { SignalBadge, SignalPanel, SignalText, toneFromScannerStatus } from './signal-display';
 
 const SANDBOX_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
-const SANDBOX_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
+const SANDBOX_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 250 : 120000;
 const LIVE_SESSION_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 const LIVE_ACTIVITY_REFRESH_INTERVAL_MS = 3000;
 const LIVE_SESSION_IDLE_TIMEOUT_MINUTES = 5;

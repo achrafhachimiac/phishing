@@ -450,6 +450,143 @@ describe('backend app', () => {
     expect(response.body.relatedDomains[0].relation).toBe('url');
   });
 
+  it('creates an EML analysis job and returns its initial state', async () => {
+    const app = createApp({
+      enqueueEmlAnalysisJob: async () => ({
+        jobId: 'job_eml_123',
+        status: 'queued',
+        filename: 'suspicious.eml',
+        emailAnalysis: null,
+        attachmentCount: 0,
+        analyzedAttachmentCount: 0,
+        ignoredAttachments: [],
+        fileAnalysisJobId: null,
+        attachmentResults: [],
+        consolidatedThreatLevel: null,
+        consolidatedRiskScore: null,
+        executiveSummary: null,
+        error: null,
+      }),
+    });
+
+    const response = await request(app)
+      .post('/api/analyze/eml')
+      .send({ filename: 'suspicious.eml', rawEmail: 'From: alerts@secure-example.test' });
+
+    expect(response.status).toBe(202);
+    expect(response.body.jobId).toBe('job_eml_123');
+    expect(response.body.status).toBe('queued');
+  });
+
+  it('returns an EML analysis job by id', async () => {
+    const app = createApp({
+      getEmlAnalysisJob: async () => ({
+        jobId: 'job_eml_123',
+        status: 'completed',
+        filename: 'suspicious.eml',
+        emailAnalysis: {
+          headers: {
+            from: 'alerts@secure-example.test',
+            to: 'victim@example.org',
+            subject: 'Urgent invoice review',
+            date: 'Tue, 08 Apr 2026 10:00:00 +0000',
+            messageId: '<abc@example.test>',
+            returnPath: 'bounce@secure-example.test',
+          },
+          authentication: {
+            spf: 'fail',
+            dkim: 'pass',
+            dmarc: 'fail',
+          },
+          urls: [],
+          inconsistencies: ['SPF failed for the sending domain.'],
+          threatLevel: 'HIGH',
+          executiveSummary: 'The email contains multiple phishing indicators.',
+          emailAddresses: ['alerts@secure-example.test', 'victim@example.org'],
+          domains: ['secure-example.test', 'example.org'],
+          ipAddresses: [],
+          attachments: [
+            {
+              filename: 'invoice.pdf',
+              contentType: 'application/pdf',
+              size: 32,
+              checksum: null,
+            },
+          ],
+          relatedDomains: [],
+        },
+        attachmentCount: 1,
+        analyzedAttachmentCount: 1,
+        ignoredAttachments: [],
+        fileAnalysisJobId: 'file_job_123',
+        attachmentResults: [
+          {
+            filename: 'invoice.pdf',
+            contentType: 'application/pdf',
+            detectedType: 'pdf',
+            extension: 'pdf',
+            size: 32,
+            sha256: 'deadbeef',
+            extractedUrls: [],
+            indicators: [],
+            parserReports: [],
+            riskScore: 80,
+            riskScoreBreakdown: {
+              totalScore: 80,
+              thresholds: {
+                suspicious: 25,
+                malicious: 70,
+              },
+              factors: [],
+            },
+            iocEnrichment: {
+              status: 'completed',
+              extractedUrls: [],
+              extractedDomains: [],
+              results: [],
+              summary: 'No additional IOC hits returned.',
+              updatedAt: '2026-04-12T12:00:00.000Z',
+            },
+            verdict: 'malicious',
+            summary: 'Suspicious PDF JavaScript present.',
+            storagePath: 'storage/uploads/file_job_123/00-invoice.pdf',
+            artifacts: [],
+            externalScans: {
+              virustotal: {
+                status: 'unavailable',
+                malicious: null,
+                suspicious: null,
+                reference: null,
+              },
+              clamav: {
+                status: 'clean',
+                signature: null,
+                engine: null,
+                detail: null,
+              },
+              yara: {
+                status: 'clean',
+                rules: [],
+                detail: null,
+              },
+            },
+          },
+        ],
+        consolidatedThreatLevel: 'CRITICAL',
+        consolidatedRiskScore: 80,
+        executiveSummary: 'Email threat HIGH. Attachments analyzed: 1, malicious: 1, suspicious: 0. Consolidated threat level: CRITICAL.',
+        error: null,
+      }),
+    });
+
+    const response = await request(app).get('/api/analyze/eml/job_eml_123');
+
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('completed');
+    expect(response.body.fileAnalysisJobId).toBe('file_job_123');
+    expect(response.body.consolidatedThreatLevel).toBe('CRITICAL');
+  });
+
   it('creates a URL analysis job and returns its initial state', async () => {
     const app = createApp({
       enqueueUrlAnalysis: async () => ({

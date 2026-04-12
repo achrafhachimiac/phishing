@@ -4,11 +4,12 @@ import { DomainAnalysis } from './components/DomainAnalysis';
 import { EmailAnalysis } from './components/EmailAnalysis';
 import { BrowserSandbox } from './components/BrowserSandbox';
 import { FileAnalysis } from './components/FileAnalysis';
+import { ThePhish } from './components/ThePhish';
 import { Terminal, Shield, LogOut } from 'lucide-react';
 
 export default function App() {
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking');
-  const [activeTab, setActiveTab] = useState<'domain' | 'email' | 'sandbox' | 'files'>('domain');
+  const [activeTab, setActiveTab] = useState<'domain' | 'email' | 'sandbox' | 'files' | 'thephish'>('domain');
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +108,12 @@ export default function App() {
           >
             [4] FILE ANALYSIS
           </button>
+          <button
+            onClick={() => setActiveTab('thephish')}
+            className={`cli-button px-6 py-3 flex-1 md:flex-none ${activeTab === 'thephish' ? 'bg-cyber-red text-cyber-bg shadow-[0_0_15px_rgba(255,42,42,0.5)]' : ''}`}
+          >
+            [5] THEPHISH
+          </button>
         </div>
 
         <main className="animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -114,6 +121,7 @@ export default function App() {
           {activeTab === 'email' ? <EmailAnalysis /> : null}
           {activeTab === 'sandbox' ? <BrowserSandbox /> : null}
           {activeTab === 'files' ? <FileAnalysis /> : null}
+          {activeTab === 'thephish' ? <ThePhish /> : null}
         </main>
         
         <footer className="mt-12 text-center text-xs opacity-50 border-t border-cyber-red-dim pt-4">
