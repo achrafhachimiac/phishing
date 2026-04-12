@@ -70,6 +70,11 @@ ensure_runtime_directories() {
     "${CORTEX_RUNTIME_DIR}" \
     "${CORTEX_RUNTIME_DIR}/jobs" \
     "${CORTEX_RUNTIME_DIR}/elasticsearch-data"
+
+  # Elasticsearch runs as uid 1000 in the official container and needs write access
+  # to the mounted data directory to create node.lock and shard data.
+  chown -R 1000:0 "${CORTEX_RUNTIME_DIR}/elasticsearch-data"
+  chmod 0770 "${CORTEX_RUNTIME_DIR}/elasticsearch-data"
 }
 
 ensure_runtime_secret() {
