@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -525,7 +526,7 @@ async function createTarGzArchive(files: Record<string, string>) {
 }
 
 async function runProcess(command: string, args: string[], cwd: string) {
-  await fs.access(command);
+  await ensureCommandIsExecutable(command);
 
   return new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -544,4 +545,20 @@ async function runProcess(command: string, args: string[], cwd: string) {
       reject(new Error(stderr.trim() || `${path.basename(command)} exited with code ${code ?? 'unknown'}.`));
     });
   });
+}
+
+async function ensureCommandIsExecutable(command: string) {
+  await fs.access(command);
+
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  try {
+    await fs.access(command, fsConstants.X_OK);
+  } catch {
+    const stats = await fs.stat(command);
+    await fs.chmod(command, stats.mode | 0o111);
+    await fs.access(command, fsConstants.X_OK);
+  }
 }
