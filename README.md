@@ -79,7 +79,9 @@ The deployment job bootstraps Node.js on the target host if needed, installs pro
 ### GitHub repository secrets
 
 - `SSH_PRIVATE_KEY`: private key used by GitHub Actions to connect to the server
-- `APP_ENV_FILE`: optional full contents of the production `.env` file
+- `APP_ENV_FILE`: optional full contents of the production `.env` file. This is the CI/CD source of truth for deployed environment values when provided.
+
+Important: if you make a temporary production env hotfix during incident response, update `APP_ENV_FILE` before the next deployment or CI will reapply the old values. The workflow now validates the self-hosted sandbox settings and will fail the deployment if `BROWSER_SANDBOX_PROVIDER=local-novnc` is missing required placeholders such as `:cdpPort`, `:novncPort`, or `:sessionDir`.
 
 Recommended `APP_ENV_FILE` starting point for the current self-hosted setup:
 

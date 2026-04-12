@@ -88,6 +88,49 @@ jobs:
             printf '%s' "$APP_ENV_FILE_CONTENT" > app.env
           fi
 
+      - name: Validate production env file
+        if: env.APP_ENV_FILE_CONTENT != ''
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          entries = {}
+          for raw_line in Path('app.env').read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+              continue
+            key, value = line.split('=', 1)
+            entries[key] = value.strip()
+
+          errors = []
+          provider = entries.get('BROWSER_SANDBOX_PROVIDER', '')
+          start_command = entries.get('BROWSER_SANDBOX_START_COMMAND', '')
+          stop_command = entries.get('BROWSER_SANDBOX_STOP_COMMAND', '')
+          access_url = entries.get('BROWSER_SANDBOX_ACCESS_URL_TEMPLATE', '')
+
+          if provider == 'local-novnc':
+            if 'scripts/sandbox/start-local-browser-sandbox.sh' not in start_command:
+              errors.append('BROWSER_SANDBOX_START_COMMAND must call scripts/sandbox/start-local-browser-sandbox.sh when BROWSER_SANDBOX_PROVIDER=local-novnc.')
+            if ':cdpPort' not in start_command:
+              errors.append('BROWSER_SANDBOX_START_COMMAND must include :cdpPort when BROWSER_SANDBOX_PROVIDER=local-novnc.')
+            if ':sessionDir' not in start_command:
+              errors.append('BROWSER_SANDBOX_START_COMMAND must include :sessionDir when BROWSER_SANDBOX_PROVIDER=local-novnc.')
+            if 'scripts/sandbox/stop-local-browser-sandbox.sh' not in stop_command:
+              errors.append('BROWSER_SANDBOX_STOP_COMMAND must call scripts/sandbox/stop-local-browser-sandbox.sh when BROWSER_SANDBOX_PROVIDER=local-novnc.')
+            if ':sessionDir' not in stop_command:
+              errors.append('BROWSER_SANDBOX_STOP_COMMAND must include :sessionDir when BROWSER_SANDBOX_PROVIDER=local-novnc.')
+            if ':novncPort' not in access_url:
+              errors.append('BROWSER_SANDBOX_ACCESS_URL_TEMPLATE must include :novncPort when BROWSER_SANDBOX_PROVIDER=local-novnc.')
+
+          if errors:
+            for error in errors:
+              print(error)
+            sys.exit(1)
+
+          print('Production env validation passed.')
+          PY
+
       - name: Upload deployment assets
         run: |
           scp -P "$DEPLOY_PORT" release.tgz "$DEPLOY_USER@$DEPLOY_HOST:/tmp/phishing-release.tgz"
