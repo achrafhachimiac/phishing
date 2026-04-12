@@ -80,7 +80,10 @@ ensure_runtime_secret() {
     return
   fi
 
-  openssl rand -hex 32 | tee "${secret_file}" >/dev/null
+  local secret
+  secret="$(openssl rand -hex 32)"
+  printf '%s\n' "${secret}" > "${secret_file}"
+  printf '%s' "${secret}"
 }
 
 write_runtime_env() {
