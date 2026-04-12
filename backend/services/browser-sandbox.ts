@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { chromium } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
 
 import {
   browserSandboxJobSchema,
@@ -15,6 +16,7 @@ import {
 import { appConfig } from '../config.js';
 import { getStoragePaths } from '../storage.js';
 import { buildBrowserSandboxAccess } from './browser-sandbox-provider.js';
+import { resolveBrowserSandboxRuntime } from './browser-sandbox-runtime.js';
 import { startBrowserSandboxSession, stopBrowserSandboxSession } from './browser-sandbox-session.js';
 
 type AnalyzeUrlInSandbox = (
@@ -24,8 +26,20 @@ type AnalyzeUrlInSandbox = (
 
 const browserSandboxJobs = new Map<string, BrowserSandboxJob>();
 const liveSessionLeaseTimers = new Map<string, NodeJS.Timeout>();
+const liveObservationHandles = new Map<string, LiveObservationHandle>();
 const DEFAULT_LIVE_SESSION_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const LIVE_OBSERVATION_POLL_INTERVAL_MS = 3000;
+const LIVE_OBSERVATION_SCREENSHOT_INTERVAL_MS = 5000;
 let liveSessionIdleTimeoutMs = DEFAULT_LIVE_SESSION_IDLE_TIMEOUT_MS;
+
+type LiveObservationHandle = {
+  pollTimer: NodeJS.Timeout;
+  browser: Browser | null;
+  attachedContexts: WeakSet<BrowserContext>;
+  attachedPages: WeakSet<Page>;
+  lastScreenshotAt: number;
+  syncing: boolean;
+};
 
 export class BrowserSandboxError extends Error {
   code: string;
@@ -72,6 +86,7 @@ export async function touchBrowserSandboxJob(jobId: string): Promise<BrowserSand
 
   if (existingJob.session?.status === 'ready') {
     scheduleLiveSessionLease(jobId);
+    startLiveObservation(jobId);
   }
 
   return existingJob;
@@ -87,6 +102,7 @@ export async function stopBrowserSandboxJob(
   }
 
   clearLiveSessionLease(jobId);
+  stopLiveObservation(jobId);
 
   const hasLiveSession = existingJob.session?.status === 'ready';
   if (existingJob.status === 'failed' || existingJob.status === 'stopped') {
@@ -228,6 +244,7 @@ async function runBrowserSandboxJob(
     const completedJob = browserSandboxJobs.get(jobId);
     if (completedJob?.session?.status === 'ready') {
       scheduleLiveSessionLease(jobId);
+      startLiveObservation(jobId);
     }
   } catch (error) {
     clearLiveSessionLease(jobId);
@@ -273,7 +290,13 @@ export function clearBrowserSandboxStateForTesting() {
     clearTimeout(timer);
   }
 
+  for (const handle of liveObservationHandles.values()) {
+    clearInterval(handle.pollTimer);
+    void handle.browser?.close().catch(() => undefined);
+  }
+
   liveSessionLeaseTimers.clear();
+  liveObservationHandles.clear();
   browserSandboxJobs.clear();
   liveSessionIdleTimeoutMs = DEFAULT_LIVE_SESSION_IDLE_TIMEOUT_MS;
 }
@@ -302,6 +325,276 @@ function clearLiveSessionLease(jobId: string) {
 
   clearTimeout(existingTimer);
   liveSessionLeaseTimers.delete(jobId);
+}
+
+function startLiveObservation(jobId: string) {
+  if (liveObservationHandles.has(jobId)) {
+    return;
+  }
+
+  const pollTimer = setInterval(() => {
+    void syncLiveObservation(jobId);
+  }, LIVE_OBSERVATION_POLL_INTERVAL_MS);
+
+  pollTimer.unref?.();
+  liveObservationHandles.set(jobId, {
+    pollTimer,
+    browser: null,
+    attachedContexts: new WeakSet<BrowserContext>(),
+    attachedPages: new WeakSet<Page>(),
+    lastScreenshotAt: 0,
+    syncing: false,
+  });
+
+  void syncLiveObservation(jobId);
+}
+
+function stopLiveObservation(jobId: string) {
+  const handle = liveObservationHandles.get(jobId);
+  if (!handle) {
+    return;
+  }
+
+  clearInterval(handle.pollTimer);
+  liveObservationHandles.delete(jobId);
+  void handle.browser?.close().catch(() => undefined);
+}
+
+async function syncLiveObservation(jobId: string) {
+  const handle = liveObservationHandles.get(jobId);
+  const existingJob = browserSandboxJobs.get(jobId);
+
+  if (!handle || !existingJob?.result || existingJob.session?.status !== 'ready' || existingJob.status === 'failed' || existingJob.status === 'stopped') {
+    stopLiveObservation(jobId);
+    return;
+  }
+
+  if (handle.syncing) {
+    return;
+  }
+
+  handle.syncing = true;
+
+  try {
+    if (!handle.browser?.isConnected()) {
+      handle.browser = await chromium.connectOverCDP(
+        `http://127.0.0.1:${resolveBrowserSandboxRuntime(jobId, getStoragePaths().sandboxSessions).cdpPort}`,
+      );
+      handle.browser.on('disconnected', () => {
+        const currentHandle = liveObservationHandles.get(jobId);
+        if (currentHandle === handle) {
+          currentHandle.browser = null;
+        }
+      });
+    }
+
+    const pages: Page[] = [];
+    for (const context of handle.browser.contexts()) {
+      attachLiveObservationContext(jobId, context, handle);
+      pages.push(...context.pages().filter((page) => !page.isClosed()));
+    }
+
+    const activePage = pages.at(-1) ?? null;
+    if (activePage) {
+      await refreshLiveObservationPage(jobId, activePage, handle);
+    }
+  } catch {
+    if (handle.browser) {
+      await handle.browser.close().catch(() => undefined);
+    }
+    handle.browser = null;
+  } finally {
+    handle.syncing = false;
+  }
+}
+
+function attachLiveObservationContext(jobId: string, context: BrowserContext, handle: LiveObservationHandle) {
+  if (!handle.attachedContexts.has(context)) {
+    handle.attachedContexts.add(context);
+    context.on('page', (page) => {
+      attachLiveObservationPage(jobId, page, handle);
+      void refreshLiveObservationPage(jobId, page, handle);
+    });
+  }
+
+  for (const page of context.pages()) {
+    attachLiveObservationPage(jobId, page, handle);
+  }
+}
+
+function attachLiveObservationPage(jobId: string, page: Page, handle: LiveObservationHandle) {
+  if (handle.attachedPages.has(page)) {
+    return;
+  }
+
+  handle.attachedPages.add(page);
+
+  page.on('request', (request) => {
+    try {
+      const hostname = new URL(request.url()).hostname;
+      mergeLiveObservation(jobId, {
+        requestedDomains: [hostname],
+        scriptUrls: request.resourceType() === 'script' ? [request.url()] : [],
+      });
+    } catch {
+      return;
+    }
+  });
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      mergeLiveObservation(jobId, {
+        consoleErrors: [message.text()],
+      });
+    }
+  });
+
+  page.on('download', async (download) => {
+    const downloadsDirectory = path.join(getStoragePaths().downloads, jobId);
+    await fs.mkdir(downloadsDirectory, { recursive: true });
+
+    const suggestedFilename = sanitizeFilename(download.suggestedFilename());
+    const targetPath = path.join(downloadsDirectory, suggestedFilename);
+
+    try {
+      await download.saveAs(targetPath);
+      const fileBuffer = await fs.readFile(targetPath);
+      mergeLiveObservation(jobId, {
+        downloads: [{
+          filename: suggestedFilename,
+          path: targetPath,
+          url: download.url() || null,
+          sha256: createHash('sha256').update(fileBuffer).digest('hex'),
+          size: fileBuffer.byteLength,
+        }],
+      });
+    } catch {
+      return;
+    }
+  });
+
+  page.on('framenavigated', (frame) => {
+    if (frame !== page.mainFrame()) {
+      return;
+    }
+
+    const currentUrl = page.url();
+    if (!currentUrl) {
+      return;
+    }
+
+    mergeLiveObservation(jobId, {
+      finalUrl: currentUrl,
+      redirectChain: [currentUrl],
+    });
+  });
+}
+
+async function refreshLiveObservationPage(jobId: string, page: Page, handle: LiveObservationHandle) {
+  const now = Date.now();
+  if (now - handle.lastScreenshotAt < LIVE_OBSERVATION_SCREENSHOT_INTERVAL_MS) {
+    return;
+  }
+
+  handle.lastScreenshotAt = now;
+
+  const existingJob = browserSandboxJobs.get(jobId);
+  if (!existingJob?.result) {
+    return;
+  }
+
+  const screenshotPath = existingJob.result.screenshotPath
+    ?? path.join(getStoragePaths().sandboxSessions, jobId, createSafeScreenshotFilename(existingJob.requestedUrl));
+
+  await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
+
+  try {
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+  } catch {
+    return;
+  }
+
+  let pageTitle: string | null = null;
+  try {
+    pageTitle = (await page.title()) || null;
+  } catch {
+    pageTitle = null;
+  }
+
+  mergeLiveObservation(jobId, {
+    finalUrl: page.url() || existingJob.result.finalUrl,
+    title: pageTitle,
+    screenshotPath,
+  });
+}
+
+function mergeLiveObservation(
+  jobId: string,
+  updates: {
+    finalUrl?: string | null;
+    title?: string | null;
+    screenshotPath?: string | null;
+    redirectChain?: string[];
+    requestedDomains?: string[];
+    scriptUrls?: string[];
+    consoleErrors?: string[];
+    downloads?: ObservedDownload[];
+  },
+) {
+  const existingJob = browserSandboxJobs.get(jobId);
+  if (!existingJob?.result) {
+    return;
+  }
+
+  const nextDownloads = mergeObservedDownloads(existingJob.result.downloads, updates.downloads ?? []);
+  browserSandboxJobs.set(jobId, {
+    ...existingJob,
+    result: {
+      ...existingJob.result,
+      finalUrl: updates.finalUrl ?? existingJob.result.finalUrl,
+      title: updates.title ?? existingJob.result.title,
+      screenshotPath: updates.screenshotPath ?? existingJob.result.screenshotPath,
+      redirectChain: mergeStringValues(existingJob.result.redirectChain, updates.redirectChain ?? []),
+      requestedDomains: mergeStringValues(existingJob.result.requestedDomains, updates.requestedDomains ?? []),
+      scriptUrls: mergeStringValues(existingJob.result.scriptUrls, updates.scriptUrls ?? []),
+      consoleErrors: mergeStringValues(existingJob.result.consoleErrors, updates.consoleErrors ?? []),
+      downloads: nextDownloads,
+      artifacts: buildBrowserSandboxArtifacts(
+        updates.screenshotPath ?? existingJob.result.screenshotPath,
+        existingJob.result.tracePath,
+        nextDownloads,
+      ),
+    },
+  });
+}
+
+function mergeStringValues(existing: string[], incoming: string[]) {
+  if (!incoming.length) {
+    return existing;
+  }
+
+  const merged = new Set(existing);
+  for (const value of incoming) {
+    const normalizedValue = value.trim();
+    if (normalizedValue) {
+      merged.add(normalizedValue);
+    }
+  }
+
+  return [...merged];
+}
+
+function mergeObservedDownloads(existing: ObservedDownload[], incoming: ObservedDownload[]) {
+  if (!incoming.length) {
+    return existing;
+  }
+
+  const merged = new Map(existing.map((download) => [`${download.path}:${download.sha256}`, download]));
+  for (const download of incoming) {
+    merged.set(`${download.path}:${download.sha256}`, download);
+  }
+
+  return [...merged.values()];
 }
 
 export async function analyzeUrlInLocalSandbox(

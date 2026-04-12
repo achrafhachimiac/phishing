@@ -7,7 +7,8 @@ TARGET_URL="${2:?target url required}"
 DISPLAY_NUMBER="${3:?display number required}"
 VNC_PORT="${4:?vnc port required}"
 NOVNC_PORT="${5:?novnc port required}"
-SESSION_DIR="${6:?session directory required}"
+CDP_PORT="${6:?cdp port required}"
+SESSION_DIR="${7:?session directory required}"
 
 DISPLAY=":${DISPLAY_NUMBER}"
 RUNTIME_DIR="${SESSION_DIR}/runtime"
@@ -69,6 +70,8 @@ start_if_missing "${CHROMIUM_PID_FILE}" env DISPLAY="${DISPLAY}" "${CHROMIUM_BIN
   --no-sandbox \
   --disable-dev-shm-usage \
   --disable-gpu \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port="${CDP_PORT}" \
   --window-size=1440,900 \
   --new-window \
   --no-default-browser-check \
@@ -88,4 +91,5 @@ TARGET_URL=${TARGET_URL}
 DISPLAY=${DISPLAY}
 VNC_PORT=${VNC_PORT}
 NOVNC_PORT=${NOVNC_PORT}
+CDP_PORT=${CDP_PORT}
 EOF

@@ -11,6 +11,7 @@ describe('resolveBrowserSandboxRuntime', () => {
     expect(runtime.displayNumber).toBeGreaterThanOrEqual(100);
     expect(runtime.vncPort).toBeGreaterThanOrEqual(5900);
     expect(runtime.novncPort).toBeGreaterThanOrEqual(7600);
+    expect(runtime.cdpPort).toBeGreaterThanOrEqual(9200);
     expect(runtime.sessionDirectory).toContain(path.join('storage', 'sandbox-sessions', 'sandbox_job_123'));
   });
 

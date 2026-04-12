@@ -89,6 +89,7 @@ function interpolateCommandTemplate(
     .replaceAll(':displayNumber', String(runtime.displayNumber))
     .replaceAll(':vncPort', String(runtime.vncPort))
     .replaceAll(':novncPort', String(runtime.novncPort))
+    .replaceAll(':cdpPort', String(runtime.cdpPort))
     .replaceAll(':sessionDir', shellEscape(runtime.sessionDirectory));
 }
 

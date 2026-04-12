@@ -13,7 +13,7 @@ describe('browser sandbox session lifecycle', () => {
         accessBaseUrl: null,
         accessUrlTemplate: 'http://127.0.0.1::novncPort/vnc.html?autoconnect=1',
         accessPathTemplate: '/sessions/:jobId',
-        startCommandTemplate: 'start-session --job :jobId --target :url --access :accessUrl --display :displayNumber --vnc :vncPort --novnc :novncPort --dir :sessionDir',
+        startCommandTemplate: 'start-session --job :jobId --target :url --access :accessUrl --display :displayNumber --vnc :vncPort --novnc :novncPort --cdp :cdpPort --dir :sessionDir',
         stopCommandTemplate: 'stop-session --job :jobId',
       },
       {
@@ -26,6 +26,7 @@ describe('browser sandbox session lifecycle', () => {
     expect(runCommand).toHaveBeenCalledWith(
       expect.stringContaining('start-session --job sandbox_job_123 --target "https://example.org/login" --access "http://127.0.0.1:'),
     );
+    expect(runCommand).toHaveBeenCalledWith(expect.stringContaining(' --cdp 92'));
     expect(session.status).toBe('ready');
     expect(session.access.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/vnc\.html\?autoconnect=1$/);
     expect(session.runtime.sessionDirectory).toContain('sandbox_job_123');

@@ -7,7 +7,9 @@ import { isPreviewableImage, toStorageUrl } from './storage-assets';
 const SANDBOX_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const SANDBOX_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
 const LIVE_SESSION_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+const LIVE_ACTIVITY_REFRESH_INTERVAL_MS = 3000;
 const LIVE_SESSION_IDLE_TIMEOUT_MINUTES = 5;
+const OBSERVED_VALUE_MAX_LENGTH = 100;
 
 export function BrowserSandbox() {
   const [targetUrl, setTargetUrl] = useState('');
@@ -16,6 +18,7 @@ export function BrowserSandbox() {
   const [error, setError] = useState('');
   const [iframeHeight, setIframeHeight] = useState(720);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const liveBrowserContainerRef = useRef<HTMLDivElement | null>(null);
 
   const liveAccess = sandboxJob?.result?.access ?? null;
@@ -78,6 +81,58 @@ export function BrowserSandbox() {
       window.removeEventListener('focus', handleFocus);
     };
   }, [isEmbeddedAccess, sandboxJob?.jobId, sandboxJob?.result?.session.status]);
+
+  useEffect(() => {
+    if (!sandboxJob?.jobId || sandboxJob.result?.session.status !== 'ready') {
+      return;
+    }
+
+    const refreshTimer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const response = await fetch(`/api/sandbox/browser/${sandboxJob.jobId}`, {
+            method: 'GET',
+          });
+          const refreshedJob = (await response.json()) as BrowserSandboxJob | { message?: string };
+
+          if (response.ok && 'jobId' in refreshedJob) {
+            setSandboxJob(refreshedJob);
+          }
+        } catch {
+          return;
+        }
+      })();
+    }, LIVE_ACTIVITY_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+    };
+  }, [sandboxJob?.jobId, sandboxJob?.result?.session.status]);
+
+  const handleCopyObservedValue = async (value: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = value;
+        textArea.setAttribute('readonly', 'true');
+        textArea.style.position = 'absolute';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+
+      setCopiedValue(value);
+      window.setTimeout(() => {
+        setCopiedValue((currentValue) => (currentValue === value ? null : currentValue));
+      }, 1500);
+    } catch {
+      setCopiedValue(null);
+    }
+  };
 
   const handleLaunchSandbox = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -271,25 +326,44 @@ export function BrowserSandbox() {
                 <div className="space-y-4 text-sm">
                   <div>
                     <div className="text-xs opacity-70 uppercase mb-2">Requested Domains</div>
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       {sandboxJob.result.requestedDomains.length ? sandboxJob.result.requestedDomains.map((domain) => (
-                        <div key={domain} className="break-all">{domain}</div>
+                        <div key={domain}>
+                          <ObservedValueCard
+                            value={domain}
+                            copied={copiedValue === domain}
+                            onCopy={handleCopyObservedValue}
+                          />
+                        </div>
                       )) : <div className="opacity-70">None observed</div>}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs opacity-70 uppercase mb-2">Script URLs</div>
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       {sandboxJob.result.scriptUrls.length ? sandboxJob.result.scriptUrls.map((scriptUrl) => (
-                        <div key={scriptUrl} className="break-all">{scriptUrl}</div>
+                        <div key={scriptUrl}>
+                          <ObservedValueCard
+                            value={scriptUrl}
+                            copied={copiedValue === scriptUrl}
+                            onCopy={handleCopyObservedValue}
+                          />
+                        </div>
                       )) : <div className="opacity-70">None observed</div>}
                     </div>
                   </div>
                   <div>
                     <div className="text-xs opacity-70 uppercase mb-2">Console Errors</div>
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       {sandboxJob.result.consoleErrors.length ? sandboxJob.result.consoleErrors.map((consoleError) => (
-                        <div key={consoleError} className="text-red-400 break-all">{consoleError}</div>
+                        <div key={consoleError}>
+                          <ObservedValueCard
+                            value={consoleError}
+                            copied={copiedValue === consoleError}
+                            onCopy={handleCopyObservedValue}
+                            className="text-red-400"
+                          />
+                        </div>
                       )) : <div className="opacity-70">None observed</div>}
                     </div>
                   </div>
@@ -307,8 +381,17 @@ export function BrowserSandbox() {
                     {sandboxJob.result.downloads.map((download) => (
                       <div key={`${download.filename}-${download.sha256}`} className="border border-cyber-red-dim bg-black/40 p-3">
                         <div className="font-bold break-all">{download.filename}</div>
-                        <div className="break-all">
-                          URL: {download.url ? <a href={download.url} target="_blank" rel="noreferrer" className="text-cyber-red underline">{download.url}</a> : 'Unavailable'}
+                        <div className="mt-2">
+                          <div className="text-xs opacity-70 uppercase mb-2">Source URL</div>
+                          {download.url ? (
+                            <ObservedValueCard
+                              value={download.url}
+                              copied={copiedValue === download.url}
+                              onCopy={handleCopyObservedValue}
+                            />
+                          ) : (
+                            <div className="opacity-70">Unavailable</div>
+                          )}
                         </div>
                         <div><ArtifactLink filePath={download.path} label="Stored copy" /></div>
                         <div className="break-all">SHA256: {download.sha256}</div>
@@ -404,4 +487,38 @@ function ArtifactLink({ filePath, label }: { filePath: string | null; label: str
       {label} <ExternalLink size={12} />
     </a>
   );
+}
+
+function ObservedValueCard(
+  {
+    value,
+    copied,
+    onCopy,
+    className = '',
+  }: {
+    value: string;
+    copied: boolean;
+    onCopy: (value: string) => Promise<void>;
+    className?: string;
+  },
+) {
+  return (
+    <button
+      type="button"
+      onClick={() => void onCopy(value)}
+      title={value}
+      className={`w-full border border-cyber-red-dim bg-black/40 px-3 py-2 text-left transition hover:bg-black/70 ${className}`.trim()}
+    >
+      <div className="font-mono text-xs break-all">{truncateObservedValue(value)}</div>
+      <div className="mt-1 text-[11px] uppercase tracking-wider opacity-60">{copied ? 'Copied' : 'Click to copy full value'}</div>
+    </button>
+  );
+}
+
+function truncateObservedValue(value: string) {
+  if (value.length <= OBSERVED_VALUE_MAX_LENGTH) {
+    return value;
+  }
+
+  return `${value.slice(0, OBSERVED_VALUE_MAX_LENGTH)}...`;
 }

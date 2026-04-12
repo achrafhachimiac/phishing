@@ -38,7 +38,7 @@ View your app in AI Studio: https://ai.studio/apps/87485238-a188-4a21-b9e7-8d703
    - `BROWSER_SANDBOX_PROVIDER=local-novnc`
    - `BROWSER_SANDBOX_ACCESS_MODE=embedded`
    - `BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote`
-   - `BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :sessionDir`
+   - `BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :cdpPort :sessionDir`
    - `BROWSER_SANDBOX_STOP_COMMAND=bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId :sessionDir`
 - With that configuration, the app returns a clickable `access.url`, can render an embedded iframe analyst console, and can start a local Xvfb + Chromium + x11vnc + noVNC stack on the same Linux host.
 - The runtime allocates deterministic ports and session directories from each `jobId`, so the backend and the shell scripts resolve the same display, VNC port, and noVNC port without an external provider.
@@ -95,7 +95,7 @@ BROWSER_SANDBOX_PROVIDER=local-novnc
 BROWSER_SANDBOX_ACCESS_MODE=embedded
 BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote
 BROWSER_SANDBOX_ACCESS_PATH_TEMPLATE=:jobId
-BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :sessionDir
+BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :cdpPort :sessionDir
 BROWSER_SANDBOX_STOP_COMMAND=bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId :sessionDir
 ```
 
