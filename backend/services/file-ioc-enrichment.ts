@@ -121,6 +121,15 @@ async function enrichUrlIoc(url: string): Promise<FileEnrichedIoc> {
     },
   ];
 
+  if (enrichment.cortex) {
+    providerResults.push({
+      provider: 'cortex',
+      status: enrichment.cortex.status,
+      detail: `${enrichment.cortex.matchedAnalyzerCount}/${enrichment.cortex.analyzerCount} analyzer(s) matched`,
+      reference: null,
+    });
+  }
+
   return {
     type: 'url',
     value: url,
@@ -167,6 +176,15 @@ async function enrichDomainIoc(domain: string): Promise<FileEnrichedIoc> {
       reference: enrichment.urlhausHost.reference,
     },
   ];
+
+  if (enrichment.cortex) {
+    providerResults.push({
+      provider: 'cortex',
+      status: enrichment.cortex.status,
+      detail: `${enrichment.cortex.matchedAnalyzerCount}/${enrichment.cortex.analyzerCount} analyzer(s) matched`,
+      reference: null,
+    });
+  }
 
   return {
     type: 'domain',
@@ -295,6 +313,7 @@ function formatProviderName(provider: FileIocProviderResult['provider']) {
   const labels: Record<FileIocProviderResult['provider'], string> = {
     abuseipdb: 'AbuseIPDB',
     alienvault: 'AlienVault OTX',
+    cortex: 'Cortex',
     urlhaus: 'URLhaus',
     urlhaus_host: 'URLhaus Host',
     urlscan: 'URLScan',

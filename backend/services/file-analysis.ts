@@ -12,6 +12,7 @@ import * as tar from 'tar';
 
 import {
   type ArchiveTreeNode,
+  type CortexProviderSummary,
   type ExtractedArchiveTree,
   fileAnalysisJobSchema,
   type FileArtifact,
@@ -27,12 +28,14 @@ import {
 import { appConfig } from '../config.js';
 import { getStoragePaths } from '../storage.js';
 import { buildPendingIocEnrichment, buildUnavailableIocEnrichment, enrichFileIocs } from './file-ioc-enrichment.js';
+import { analyzeFileHashWithCortex } from './cortex-orchestration.js';
 
 type AnalyzeUploadedFile = (
   file: FileUpload,
   context: { jobId: string; index: number },
 ) => Promise<FileStaticAnalysisResult>;
 type EnrichFileWithThreatIntel = (hash: string) => Promise<FileExternalScan['virustotal']>;
+type EnrichFileWithCortex = (filename: string, hash: string) => Promise<CortexProviderSummary>;
 type EnrichExtractedIocs = (urls: string[]) => Promise<{ enrichment: FileIocEnrichment; indicators: FileIndicator[] }>;
 type RunScannerCommand = (command: string) => Promise<{ stdout: string; stderr: string }>;
 
@@ -60,6 +63,7 @@ export async function enqueueFileAnalysisJob(
   enrichFileWithThreatIntel: EnrichFileWithThreatIntel = lookupFileThreatIntel,
   createJobId: () => string = randomUUID,
   enrichExtractedIocs: EnrichExtractedIocs = enrichFileIocs,
+  enrichFileWithCortex: EnrichFileWithCortex = analyzeFileHashWithCortex,
 ): Promise<FileAnalysisJob> {
   const normalizedFiles = normalizeFiles(files);
   const jobId = createJobId();
@@ -73,7 +77,7 @@ export async function enqueueFileAnalysisJob(
   fileAnalysisJobs.set(jobId, queuedJob);
   queueMicrotask(async () => {
     try {
-      await runFileAnalysisJob(jobId, normalizedFiles, analyzeUploadedFile, enrichFileWithThreatIntel, enrichExtractedIocs);
+      await runFileAnalysisJob(jobId, normalizedFiles, analyzeUploadedFile, enrichFileWithThreatIntel, enrichExtractedIocs, enrichFileWithCortex);
     } catch (error) {
       fileAnalysisJobs.set(jobId, buildFailedFileAnalysisJob(jobId, normalizedFiles, error));
     }
@@ -92,13 +96,14 @@ export async function createFileAnalysisJob(
   enrichFileWithThreatIntel: EnrichFileWithThreatIntel = lookupFileThreatIntel,
   createJobId: () => string = randomUUID,
   enrichExtractedIocs: EnrichExtractedIocs = enrichFileIocs,
+  enrichFileWithCortex: EnrichFileWithCortex = analyzeFileHashWithCortex,
 ): Promise<FileAnalysisJob> {
   const normalizedFiles = normalizeFiles(files);
   const jobId = createJobId();
   const results = await Promise.all(
     normalizedFiles.map(async (file, index) => {
       const analysis = await analyzeUploadedFile(file, { jobId, index });
-      return completeFileAnalysisResult(analysis, enrichFileWithThreatIntel, enrichExtractedIocs);
+      return completeFileAnalysisResult(analysis, enrichFileWithThreatIntel, enrichExtractedIocs, enrichFileWithCortex);
     }),
   );
 
@@ -211,6 +216,7 @@ export async function analyzeUploadedFileStatically(
     artifacts,
     externalScans: {
       virustotal: pendingVirusTotalScan(),
+      cortex: pendingCortexScan(),
       clamav: localScans.clamav,
       yara: localScans.yara,
     },
@@ -223,6 +229,7 @@ async function runFileAnalysisJob(
   analyzeUploadedFile: AnalyzeUploadedFile,
   enrichFileWithThreatIntel: EnrichFileWithThreatIntel,
   enrichExtractedIocs: EnrichExtractedIocs,
+  enrichFileWithCortex: EnrichFileWithCortex,
 ) {
   fileAnalysisJobs.set(jobId, {
     jobId,
@@ -244,7 +251,7 @@ async function runFileAnalysisJob(
         results,
       }));
 
-      results[results.length - 1] = await completeFileAnalysisResult(analysis, enrichFileWithThreatIntel, enrichExtractedIocs);
+      results[results.length - 1] = await completeFileAnalysisResult(analysis, enrichFileWithThreatIntel, enrichExtractedIocs, enrichFileWithCortex);
       fileAnalysisJobs.set(jobId, fileAnalysisJobSchema.parse({
         jobId,
         status: 'running',
@@ -272,6 +279,7 @@ async function runFileAnalysisJob(
         artifacts: [],
         externalScans: {
           virustotal: pendingVirusTotalScan(),
+          cortex: pendingCortexScan(),
           clamav: emptyClamAvScan('unavailable'),
           yara: emptyYaraScan('unavailable'),
         },
@@ -319,6 +327,7 @@ function buildFailedFileAnalysisJob(jobId: string, files: FileUpload[], error: u
         artifacts: [],
         externalScans: {
           virustotal: pendingVirusTotalScan(),
+          cortex: pendingCortexScan(),
           clamav: emptyClamAvScan('unavailable'),
           yara: emptyYaraScan('unavailable'),
         },
@@ -331,9 +340,11 @@ async function completeFileAnalysisResult(
   analysis: FileStaticAnalysisResult,
   enrichFileWithThreatIntel: EnrichFileWithThreatIntel,
   enrichExtractedIocs: EnrichExtractedIocs,
+  enrichFileWithCortex: EnrichFileWithCortex,
 ): Promise<FileStaticAnalysisResult> {
-  const [virustotal, iocCompletion] = await Promise.all([
+  const [virustotal, cortex, iocCompletion] = await Promise.all([
     enrichFileWithThreatIntel(analysis.sha256).catch(() => emptyVirusTotalScan()),
+    enrichFileWithCortex(analysis.filename, analysis.sha256).catch(() => emptyCortexScan('unavailable')),
     enrichExtractedIocs(analysis.extractedUrls)
       .catch((error) => ({
         enrichment: buildUnavailableIocEnrichment(
@@ -343,7 +354,7 @@ async function completeFileAnalysisResult(
         indicators: [] as FileIndicator[],
       })),
   ]);
-  const indicators = deduplicateIndicators([...analysis.indicators, ...iocCompletion.indicators]);
+  const indicators = deduplicateIndicators([...analysis.indicators, ...buildIndicatorsFromCortexScan(cortex), ...iocCompletion.indicators]);
   const riskScore = Math.min(
     100,
     indicators.reduce((score, indicator) => score + severityWeight(indicator.severity), 0),
@@ -362,6 +373,7 @@ async function completeFileAnalysisResult(
       indicators,
       parserReports: analysis.parserReports,
       scans: {
+        cortex,
         clamav: analysis.externalScans.clamav,
         yara: analysis.externalScans.yara,
       },
@@ -370,6 +382,7 @@ async function completeFileAnalysisResult(
     externalScans: {
       ...analysis.externalScans,
       virustotal,
+      cortex,
     },
   };
 }
@@ -642,11 +655,23 @@ function buildIndicatorsFromExternalScans(scans: Pick<FileExternalScan, 'clamav'
   return indicators;
 }
 
+function buildIndicatorsFromCortexScan(scan: CortexProviderSummary): FileIndicator[] {
+  if (scan.status === 'malicious') {
+    return [{ kind: 'cortex_malicious', severity: 'high', value: scan.summary }];
+  }
+
+  if (scan.status === 'suspicious') {
+    return [{ kind: 'cortex_suspicious', severity: 'medium', value: scan.summary }];
+  }
+
+  return [];
+}
+
 function buildStaticAnalysisSummary(context: {
   verdict: FileStaticAnalysisResult['verdict'];
   indicators: FileIndicator[];
   parserReports: FileParserReport[];
-  scans: Pick<FileExternalScan, 'clamav' | 'yara'>;
+  scans: Pick<FileExternalScan, 'clamav' | 'yara' | 'cortex'>;
   iocEnrichment?: FileIocEnrichment;
 }) {
   if (context.verdict === 'clean') {
@@ -663,6 +688,9 @@ function buildStaticAnalysisSummary(context: {
   }
   if (context.scans.yara.status === 'match' && context.scans.yara.rules.length > 0) {
     scanNotes.push(`YARA matched ${context.scans.yara.rules.join(', ')}.`);
+  }
+  if (context.scans.cortex && ['malicious', 'suspicious'].includes(context.scans.cortex.status)) {
+    scanNotes.push(`Cortex reported ${context.scans.cortex.status} file reputation evidence.`);
   }
 
   return [
@@ -907,6 +935,8 @@ function formatIndicatorLabel(kind: FileIndicator['kind']): string {
     ioc_malicious_url: 'IOC Malicious URL',
     ioc_suspicious_domain: 'IOC Suspicious Domain',
     ioc_suspicious_url: 'IOC Suspicious URL',
+    cortex_malicious: 'Cortex Malicious Reputation',
+    cortex_suspicious: 'Cortex Suspicious Reputation',
     office_macro: 'Office Macro',
     pdf_javascript: 'PDF JavaScript',
     pe_header: 'PE Header',
@@ -1413,6 +1443,28 @@ function pendingVirusTotalScan(): FileExternalScan['virustotal'] {
     malicious: null,
     suspicious: null,
     reference: null,
+  };
+}
+
+function emptyCortexScan(status: NonNullable<FileExternalScan['cortex']>['status']): NonNullable<FileExternalScan['cortex']> {
+  return {
+    status,
+    analyzerCount: 0,
+    matchedAnalyzerCount: 0,
+    summary: status === 'not_configured'
+      ? 'Cortex file reputation enrichment is not configured.'
+      : status === 'unavailable'
+        ? 'Cortex file reputation enrichment is unavailable.'
+        : 'Cortex file reputation enrichment found no matches.',
+  };
+}
+
+function pendingCortexScan(): NonNullable<FileExternalScan['cortex']> {
+  return {
+    status: 'unavailable',
+    analyzerCount: 0,
+    matchedAnalyzerCount: 0,
+    summary: 'Cortex file reputation enrichment has not completed yet.',
   };
 }
 

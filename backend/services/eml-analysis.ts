@@ -1,21 +1,32 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
+  type CortexAnalyzerResult,
   emlAnalysisJobSchema,
   emlAnalysisRequestSchema,
   type EmailAnalysisResponse,
   type EmlAnalysisJob,
+  type EmlExternalEnrichment,
   type EmlIgnoredAttachment,
   type FileAnalysisJob,
   type FileStaticAnalysisResult,
   type FileUpload,
 } from '../../shared/analysis-types.js';
 import { analyzeEmail } from './email-analysis.js';
+import {
+  analyzeEmailWithCortex,
+  analyzeFileHashesWithCortex,
+  analyzeObservablesWithCortex,
+  type CortexBatchAnalysis,
+} from './cortex-orchestration.js';
 import { enqueueFileAnalysisJob, getFileAnalysisJob } from './file-analysis.js';
 import { parseRawEmailForAnalysis, type ParsedEmailForAnalysis } from './email-parser.js';
 
 type EmlAnalysisDependencies = {
   analyzeEmail?: typeof analyzeEmail;
+  analyzeEmailWithCortex?: typeof analyzeEmailWithCortex;
+  analyzeObservablesWithCortex?: typeof analyzeObservablesWithCortex;
+  analyzeFileHashesWithCortex?: typeof analyzeFileHashesWithCortex;
   parseEmailForAnalysis?: typeof parseRawEmailForAnalysis;
   enqueueFileAnalysisJob?: typeof enqueueFileAnalysisJob;
   getFileAnalysisJob?: typeof getFileAnalysisJob;
@@ -83,6 +94,9 @@ async function runEmlAnalysisJob(
 ) {
   const parseEmailForAnalysis = dependencies.parseEmailForAnalysis ?? parseRawEmailForAnalysis;
   const analyzeEmailHandler = dependencies.analyzeEmail ?? analyzeEmail;
+  const analyzeEmailWithCortexHandler = dependencies.analyzeEmailWithCortex ?? analyzeEmailWithCortex;
+  const analyzeObservablesWithCortexHandler = dependencies.analyzeObservablesWithCortex ?? analyzeObservablesWithCortex;
+  const analyzeFileHashesWithCortexHandler = dependencies.analyzeFileHashesWithCortex ?? analyzeFileHashesWithCortex;
   const enqueueFileAnalysisHandler = dependencies.enqueueFileAnalysisJob ?? enqueueFileAnalysisJob;
   const getFileAnalysisJobHandler = dependencies.getFileAnalysisJob ?? getFileAnalysisJob;
   const wait = dependencies.wait ?? defaultWait;
@@ -95,9 +109,19 @@ async function runEmlAnalysisJob(
   const parsedForAnalysis = await parseEmailForAnalysis(rawEmail);
   const emailAnalysis = await analyzeEmailHandler(rawEmail);
   const attachmentSelection = selectAttachmentUploads(parsedForAnalysis);
+  const emailExternalAnalysisPromise = analyzeEmailWithCortexHandler(filename, rawEmail);
+  const observableExternalAnalysisPromise = analyzeObservablesWithCortexHandler(
+    emailAnalysis.urls.map((url) => url.decodedUrl),
+    deduplicateValues(emailAnalysis.domains),
+  );
 
   if (attachmentSelection.files.length === 0) {
     const consolidated = buildConsolidatedVerdict(emailAnalysis, []);
+    const externalEnrichment = await buildExternalEnrichment(
+      emailExternalAnalysisPromise,
+      observableExternalAnalysisPromise,
+      Promise.resolve(buildUnavailableBatchAnalysis('No analyzed attachments were available for Cortex hash lookups.')),
+    );
     emlAnalysisJobs.set(jobId, emlAnalysisJobSchema.parse({
       jobId,
       status: 'completed',
@@ -111,6 +135,7 @@ async function runEmlAnalysisJob(
       consolidatedThreatLevel: consolidated.threatLevel,
       consolidatedRiskScore: consolidated.riskScore,
       executiveSummary: consolidated.summary,
+      externalEnrichment,
       error: null,
     }));
     return;
@@ -130,6 +155,7 @@ async function runEmlAnalysisJob(
     consolidatedThreatLevel: null,
     consolidatedRiskScore: null,
     executiveSummary: null,
+    externalEnrichment: buildRunningExternalEnrichment(),
     error: null,
   }));
 
@@ -139,6 +165,11 @@ async function runEmlAnalysisJob(
   }
 
   const consolidated = buildConsolidatedVerdict(emailAnalysis, completedChildJob.results);
+  const externalEnrichment = await buildExternalEnrichment(
+    emailExternalAnalysisPromise,
+    observableExternalAnalysisPromise,
+    analyzeFileHashesWithCortexHandler(completedChildJob.results),
+  );
   emlAnalysisJobs.set(jobId, emlAnalysisJobSchema.parse({
     jobId,
     status: 'completed',
@@ -152,6 +183,7 @@ async function runEmlAnalysisJob(
     consolidatedThreatLevel: consolidated.threatLevel,
     consolidatedRiskScore: consolidated.riskScore,
     executiveSummary: consolidated.summary,
+    externalEnrichment,
     error: null,
   }));
 }
@@ -164,6 +196,9 @@ async function buildCompletedEmlJob(
 ): Promise<EmlAnalysisJob> {
   const parseEmailForAnalysis = dependencies.parseEmailForAnalysis ?? parseRawEmailForAnalysis;
   const analyzeEmailHandler = dependencies.analyzeEmail ?? analyzeEmail;
+  const analyzeEmailWithCortexHandler = dependencies.analyzeEmailWithCortex ?? analyzeEmailWithCortex;
+  const analyzeObservablesWithCortexHandler = dependencies.analyzeObservablesWithCortex ?? analyzeObservablesWithCortex;
+  const analyzeFileHashesWithCortexHandler = dependencies.analyzeFileHashesWithCortex ?? analyzeFileHashesWithCortex;
   const enqueueFileAnalysisHandler = dependencies.enqueueFileAnalysisJob ?? enqueueFileAnalysisJob;
   const getFileAnalysisJobHandler = dependencies.getFileAnalysisJob ?? getFileAnalysisJob;
   const wait = dependencies.wait ?? defaultWait;
@@ -171,9 +206,19 @@ async function buildCompletedEmlJob(
   const parsedForAnalysis = await parseEmailForAnalysis(rawEmail);
   const emailAnalysis = await analyzeEmailHandler(rawEmail);
   const attachmentSelection = selectAttachmentUploads(parsedForAnalysis);
+  const emailExternalAnalysisPromise = analyzeEmailWithCortexHandler(filename, rawEmail);
+  const observableExternalAnalysisPromise = analyzeObservablesWithCortexHandler(
+    emailAnalysis.urls.map((url) => url.decodedUrl),
+    deduplicateValues(emailAnalysis.domains),
+  );
 
   if (attachmentSelection.files.length === 0) {
     const consolidated = buildConsolidatedVerdict(emailAnalysis, []);
+    const externalEnrichment = await buildExternalEnrichment(
+      emailExternalAnalysisPromise,
+      observableExternalAnalysisPromise,
+      Promise.resolve(buildUnavailableBatchAnalysis('No analyzed attachments were available for Cortex hash lookups.')),
+    );
     return emlAnalysisJobSchema.parse({
       jobId,
       status: 'completed',
@@ -187,6 +232,7 @@ async function buildCompletedEmlJob(
       consolidatedThreatLevel: consolidated.threatLevel,
       consolidatedRiskScore: consolidated.riskScore,
       executiveSummary: consolidated.summary,
+      externalEnrichment,
       error: null,
     });
   }
@@ -198,6 +244,11 @@ async function buildCompletedEmlJob(
   }
 
   const consolidated = buildConsolidatedVerdict(emailAnalysis, completedChildJob.results);
+  const externalEnrichment = await buildExternalEnrichment(
+    emailExternalAnalysisPromise,
+    observableExternalAnalysisPromise,
+    analyzeFileHashesWithCortexHandler(completedChildJob.results),
+  );
   return emlAnalysisJobSchema.parse({
     jobId,
     status: 'completed',
@@ -211,6 +262,7 @@ async function buildCompletedEmlJob(
     consolidatedThreatLevel: consolidated.threatLevel,
     consolidatedRiskScore: consolidated.riskScore,
     executiveSummary: consolidated.summary,
+    externalEnrichment,
     error: null,
   });
 }
@@ -337,6 +389,40 @@ function buildConsolidatedSummary(
   return `Email threat ${emailAnalysis.threatLevel}. Attachments analyzed: ${attachmentResults.length}, malicious: ${maliciousAttachments}, suspicious: ${suspiciousAttachments}. Consolidated threat level: ${threatLevel}.`;
 }
 
+async function buildExternalEnrichment(
+  emailBatchPromise: Promise<CortexBatchAnalysis>,
+  observableBatchPromise: Promise<CortexBatchAnalysis>,
+  attachmentBatchPromise: Promise<CortexBatchAnalysis>,
+): Promise<EmlExternalEnrichment> {
+  const [emailBatch, observableBatch, attachmentBatch] = await Promise.all([
+    emailBatchPromise,
+    observableBatchPromise,
+    attachmentBatchPromise,
+  ]);
+  const statuses = [emailBatch.status, observableBatch.status, attachmentBatch.status];
+  const status = statuses.includes('completed')
+    ? 'completed'
+    : statuses.every((value) => value === 'unavailable')
+      ? 'unavailable'
+      : statuses.includes('failed')
+        ? 'failed'
+        : 'running';
+
+  const updatedAt = [emailBatch.updatedAt, observableBatch.updatedAt, attachmentBatch.updatedAt]
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1) ?? null;
+
+  return {
+    status,
+    summary: [emailBatch.summary, observableBatch.summary, attachmentBatch.summary].filter(Boolean).join(' '),
+    email: emailBatch.results,
+    observables: observableBatch.results,
+    attachments: attachmentBatch.results,
+    updatedAt,
+  };
+}
+
 function mapEmailThreatLevelToScore(threatLevel: EmailAnalysisResponse['threatLevel']) {
   switch (threatLevel) {
     case 'CRITICAL':
@@ -365,6 +451,7 @@ function buildBaseJob(jobId: string, filename: string): EmlAnalysisJob {
     consolidatedThreatLevel: null,
     consolidatedRiskScore: null,
     executiveSummary: null,
+    externalEnrichment: buildRunningExternalEnrichment(),
     error: null,
   });
 }
@@ -381,4 +468,28 @@ function defaultWait(milliseconds: number) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, milliseconds);
   });
+}
+
+function buildRunningExternalEnrichment(): EmlExternalEnrichment {
+  return {
+    status: 'running',
+    summary: 'External analyzer enrichment is in progress.',
+    email: [],
+    observables: [],
+    attachments: [],
+    updatedAt: null,
+  };
+}
+
+function buildUnavailableBatchAnalysis(summary: string): CortexBatchAnalysis {
+  return {
+    status: 'unavailable',
+    summary,
+    results: [],
+    updatedAt: null,
+  };
+}
+
+function deduplicateValues(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }

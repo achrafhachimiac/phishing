@@ -9,6 +9,7 @@ PORT="${PORT:-4000}"
 RELEASE_ARCHIVE="${RELEASE_ARCHIVE:-/tmp/${APP_NAME}-release.tgz}"
 ENV_FILE_PATH="${ENV_FILE_PATH:-}"
 ENABLE_LOCAL_BROWSER_SANDBOX="${ENABLE_LOCAL_BROWSER_SANDBOX:-0}"
+ENABLE_CORTEX_VERIFY="${ENABLE_CORTEX_VERIFY:-0}"
 
 install_node() {
   if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
@@ -158,6 +159,10 @@ main() {
   if [ $retries -eq 0 ]; then
     echo "Health check failed after waiting" >&2
     exit 1
+  fi
+
+  if [ "${ENABLE_CORTEX_VERIFY}" = "1" ] && [ -f "${APP_DIR}/current/scripts/deploy/verify-prod-cortex.sh" ]; then
+    bash "${APP_DIR}/current/scripts/deploy/verify-prod-cortex.sh"
   fi
 
   rm -f "${RELEASE_ARCHIVE}"

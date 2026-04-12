@@ -125,6 +125,13 @@ export const domainVirusTotalReputationSchema = z.object({
   reference: z.string().nullable(),
 });
 
+export const cortexProviderSummarySchema = z.object({
+  status: z.enum(['malicious', 'suspicious', 'clean', 'unavailable', 'not_configured']),
+  analyzerCount: z.number().int().nonnegative(),
+  matchedAnalyzerCount: z.number().int().nonnegative(),
+  summary: z.string(),
+});
+
 export const domainUrlscanReputationSchema = z.object({
   status: z.enum(['submitted', 'clean', 'unavailable', 'not_configured']),
   resultUrl: z.string().nullable(),
@@ -149,6 +156,7 @@ export const domainReputationSchema = z.object({
   urlscan: domainUrlscanReputationSchema,
   abuseIpDb: domainAbuseIpDbReputationSchema,
   urlhausHost: domainUrlhausHostReputationSchema,
+  cortex: cortexProviderSummarySchema.optional(),
 });
 
 export const domainOsintLinksSchema = z.object({
@@ -269,6 +277,56 @@ export const emlIgnoredAttachmentSchema = z.object({
   ]),
 });
 
+export const externalAnalyzerStatusSchema = z.enum(['pending', 'running', 'completed', 'unavailable', 'failed']);
+
+export const externalAnalyzerVerdictSchema = z.enum([
+  'malicious',
+  'suspicious',
+  'clean',
+  'informational',
+  'unavailable',
+  'pending',
+]);
+
+export const cortexTaxonomySchema = z.object({
+  level: z.string().nullable(),
+  namespace: z.string(),
+  predicate: z.string(),
+  value: z.string(),
+});
+
+export const cortexArtifactSchema = z.object({
+  dataType: z.string(),
+  data: z.string(),
+  message: z.string().nullable(),
+  tags: z.array(z.string()),
+});
+
+export const cortexAnalyzerResultSchema = z.object({
+  provider: z.literal('cortex'),
+  analyzerId: z.string(),
+  analyzerName: z.string(),
+  targetType: z.enum(['eml', 'url', 'domain', 'file_hash']),
+  target: z.string(),
+  status: externalAnalyzerStatusSchema,
+  verdict: externalAnalyzerVerdictSchema,
+  summary: z.string(),
+  confidence: z.number().int().min(0).max(100).nullable(),
+  reference: z.string().nullable(),
+  taxonomies: z.array(cortexTaxonomySchema),
+  artifacts: z.array(cortexArtifactSchema),
+  rawReport: z.unknown().nullable(),
+});
+
+export const emlExternalEnrichmentSchema = z.object({
+  status: externalAnalyzerStatusSchema,
+  summary: z.string(),
+  email: z.array(cortexAnalyzerResultSchema),
+  observables: z.array(cortexAnalyzerResultSchema),
+  attachments: z.array(cortexAnalyzerResultSchema),
+  updatedAt: z.string().nullable(),
+});
+
 export const emlAnalysisJobSchema = z.object({
   jobId: z.string(),
   status: z.enum(['queued', 'parsing', 'analyzing_files', 'completed', 'failed']),
@@ -282,6 +340,7 @@ export const emlAnalysisJobSchema = z.object({
   consolidatedThreatLevel: emailThreatLevelSchema.nullable(),
   consolidatedRiskScore: z.number().int().min(0).max(100).nullable(),
   executiveSummary: z.string().nullable(),
+  externalEnrichment: emlExternalEnrichmentSchema.optional(),
   error: z.string().nullable(),
 });
 
@@ -312,6 +371,7 @@ export const urlAnalysisResultSchema = z.object({
       pulseCount: z.number().int().nullable(),
       reference: z.string().nullable(),
     }),
+    cortex: cortexProviderSummarySchema.optional(),
   }),
   originalUrl: z.string().url(),
   finalUrl: z.string().nullable(),
@@ -427,6 +487,8 @@ export const fileIndicatorSchema = z.object({
     'ioc_suspicious_url',
     'ioc_malicious_domain',
     'ioc_suspicious_domain',
+    'cortex_malicious',
+    'cortex_suspicious',
   ]),
   severity: z.enum(['low', 'medium', 'high']),
   value: z.string(),
@@ -478,7 +540,7 @@ export const fileRiskScoreBreakdownSchema = z.object({
 });
 
 export const fileIocProviderResultSchema = z.object({
-  provider: z.enum(['urlhaus', 'virustotal', 'urlscan', 'alienvault', 'abuseipdb', 'urlhaus_host']),
+  provider: z.enum(['urlhaus', 'virustotal', 'urlscan', 'alienvault', 'abuseipdb', 'urlhaus_host', 'cortex']),
   status: z.enum(['listed', 'malicious', 'suspicious', 'clean', 'submitted', 'not_listed', 'unavailable', 'not_configured']),
   detail: z.string().nullable(),
   reference: z.string().nullable(),
@@ -525,6 +587,7 @@ export const fileExternalScanSchema = z.object({
     suspicious: z.number().int().nullable(),
     reference: z.string().nullable(),
   }),
+  cortex: cortexProviderSummarySchema.optional(),
   clamav: z.object({
     status: z.enum(['malicious', 'clean', 'error', 'unavailable', 'not_configured']),
     signature: z.string().nullable(),
@@ -578,11 +641,18 @@ export type DomainIpIntelligence = z.infer<typeof domainIpIntelligenceSchema>;
 export type DomainHistory = z.infer<typeof domainHistorySchema>;
 export type DomainCertificates = z.infer<typeof domainCertificatesSchema>;
 export type DomainReputation = z.infer<typeof domainReputationSchema>;
+export type CortexProviderSummary = z.infer<typeof cortexProviderSummarySchema>;
 export type EmailParsingRequest = z.infer<typeof emailParsingRequestSchema>;
 export type EmailParsingResponse = z.infer<typeof emailParsingResponseSchema>;
 export type EmailAnalysisResponse = z.infer<typeof emailAnalysisResponseSchema>;
 export type EmlAnalysisRequest = z.infer<typeof emlAnalysisRequestSchema>;
 export type EmlIgnoredAttachment = z.infer<typeof emlIgnoredAttachmentSchema>;
+export type ExternalAnalyzerStatus = z.infer<typeof externalAnalyzerStatusSchema>;
+export type ExternalAnalyzerVerdict = z.infer<typeof externalAnalyzerVerdictSchema>;
+export type CortexTaxonomy = z.infer<typeof cortexTaxonomySchema>;
+export type CortexArtifact = z.infer<typeof cortexArtifactSchema>;
+export type CortexAnalyzerResult = z.infer<typeof cortexAnalyzerResultSchema>;
+export type EmlExternalEnrichment = z.infer<typeof emlExternalEnrichmentSchema>;
 export type EmlAnalysisJob = z.infer<typeof emlAnalysisJobSchema>;
 export type UrlAnalysisRequest = z.infer<typeof urlAnalysisRequestSchema>;
 export type UrlAnalysisResult = z.infer<typeof urlAnalysisResultSchema>;

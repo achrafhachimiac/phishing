@@ -1,3 +1,6 @@
+import type { CortexProviderSummary } from '../../shared/analysis-types.js';
+import { analyzeDomainWithCortex, analyzeUrlWithCortex } from './cortex-orchestration.js';
+
 export type ExternalScans = {
   urlhaus: {
     status: 'listed' | 'not_listed' | 'unavailable';
@@ -20,6 +23,7 @@ export type ExternalScans = {
     pulseCount: number | null;
     reference: string | null;
   };
+  cortex?: CortexProviderSummary;
 };
 
 export type DomainIpIntelligenceResult = {
@@ -77,14 +81,16 @@ export type DomainReputationResult = {
     reference: string | null;
     urls: string[];
   };
+  cortex?: CortexProviderSummary;
 };
 
 export async function lookupUrlThreatIntel(url: string): Promise<ExternalScans> {
-  const [urlhaus, virustotal, urlscan, alienVault] = await Promise.all([
+  const [urlhaus, virustotal, urlscan, alienVault, cortex] = await Promise.all([
     lookupUrlhaus(url),
     lookupVirusTotal(url),
     lookupUrlscan(url),
     lookupAlienVault(url),
+    analyzeUrlWithCortex(url).catch(() => buildUnavailableCortexSummary('Cortex URL enrichment failed unexpectedly.')),
   ]);
 
   return {
@@ -92,6 +98,7 @@ export async function lookupUrlThreatIntel(url: string): Promise<ExternalScans> 
     virustotal,
     urlscan,
     alienVault,
+    cortex,
   };
 }
 
@@ -396,12 +403,13 @@ function firstOrNull(values: string[]) {
 }
 
 export async function lookupDomainReputation(domain: string, ips: string[]): Promise<DomainReputationResult> {
-  const [alienVault, virustotal, urlscan, abuseIpDb, urlhausHost] = await Promise.all([
+  const [alienVault, virustotal, urlscan, abuseIpDb, urlhausHost, cortex] = await Promise.all([
     lookupAlienVaultDomain(domain),
     lookupVirusTotalDomain(domain),
     lookupUrlscanDomain(domain),
     lookupAbuseIpDb(ips[0] ?? null),
     lookupUrlhausHost(domain),
+    analyzeDomainWithCortex(domain).catch(() => buildUnavailableCortexSummary('Cortex domain enrichment failed unexpectedly.')),
   ]);
 
   return {
@@ -410,6 +418,16 @@ export async function lookupDomainReputation(domain: string, ips: string[]): Pro
     urlscan,
     abuseIpDb,
     urlhausHost,
+    cortex,
+  };
+}
+
+function buildUnavailableCortexSummary(summary: string): CortexProviderSummary {
+  return {
+    status: 'unavailable',
+    analyzerCount: 0,
+    matchedAnalyzerCount: 0,
+    summary,
   };
 }
 

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { AlertOctagon, Cpu, FileWarning, Inbox, Mail, Paperclip, Upload } from 'lucide-react';
+import { AlertOctagon, Cpu, FileWarning, Inbox, Mail, Paperclip, ShieldCheck, Upload } from 'lucide-react';
 
-import type { EmlAnalysisJob } from '../../shared/analysis-types';
+import type { CortexAnalyzerResult, EmlAnalysisJob, FileIocProviderResult, FileStaticAnalysisResult } from '../../shared/analysis-types';
 import { SignalBadge, SignalPanel, toneFromFileVerdict, toneFromRiskLevel, toneFromRiskScore, toneFromScannerStatus } from './signal-display';
 
 const EML_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
@@ -220,6 +220,22 @@ export function ThePhish() {
                     <span className="opacity-70">Threat:</span>
                     <span className="col-span-2"><SignalBadge tone={toneFromRiskLevel(job.emailAnalysis.threatLevel)}>{job.emailAnalysis.threatLevel}</SignalBadge></span>
                   </div>
+                  <div className="pt-2">
+                    <div className="uppercase text-xs opacity-70 mb-2 flex items-center gap-2">
+                      <ShieldCheck size={14} /> Authentication
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <SignalBadge tone={toneFromScannerStatus(job.emailAnalysis.authentication.spf)}>
+                        SPF {job.emailAnalysis.authentication.spf || 'unknown'}
+                      </SignalBadge>
+                      <SignalBadge tone={toneFromScannerStatus(job.emailAnalysis.authentication.dkim)}>
+                        DKIM {job.emailAnalysis.authentication.dkim || 'unknown'}
+                      </SignalBadge>
+                      <SignalBadge tone={toneFromScannerStatus(job.emailAnalysis.authentication.dmarc)}>
+                        DMARC {job.emailAnalysis.authentication.dmarc || 'unknown'}
+                      </SignalBadge>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -265,6 +281,53 @@ export function ThePhish() {
             </div>
           ) : null}
 
+          {job.emailAnalysis ? (
+            <div className="cli-border p-4">
+              <h4 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4">Observable Inventory</h4>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 text-sm">
+                <PanelList title="Parsed URLs" values={job.emailAnalysis.urls.map((url) => `${url.decodedUrl}${url.suspicious ? ' :: suspicious' : ''}`)} emptyMessage="No URLs extracted from the message." />
+                <PanelList title="Email Addresses" values={job.emailAnalysis.emailAddresses} emptyMessage="No email addresses extracted." />
+                <PanelList title="Domains" values={job.emailAnalysis.domains} emptyMessage="No domains extracted." />
+                <PanelList title="IP Addresses" values={job.emailAnalysis.ipAddresses} emptyMessage="No IP addresses extracted." />
+                <PanelList title="Header Inconsistencies" values={job.emailAnalysis.inconsistencies} emptyMessage="No header inconsistencies detected." tone="warning" />
+                <RelatedDomainList domains={job.emailAnalysis.relatedDomains} />
+              </div>
+            </div>
+          ) : null}
+
+          {job.externalEnrichment ? (
+            <div className="cli-border p-4">
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+                <div>
+                  <h4 className="text-lg border-b border-cyber-red-dim pb-2 uppercase">External Analyzer Results</h4>
+                  <p className="text-sm opacity-80 mt-2">{job.externalEnrichment.summary}</p>
+                </div>
+                <div>
+                  <div className="text-xs opacity-70 uppercase">External Status</div>
+                  <SignalBadge tone={toneFromScannerStatus(job.externalEnrichment.status)}>{job.externalEnrichment.status}</SignalBadge>
+                </div>
+              </div>
+              <ExternalAnalyzerOverview enrichment={job.externalEnrichment} />
+              {job.externalEnrichment.updatedAt ? (
+                <div className="text-xs opacity-60 mb-4">Last updated: {job.externalEnrichment.updatedAt}</div>
+              ) : null}
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <div className="uppercase text-xs opacity-70 mb-2">Email analyzers</div>
+                  <ExternalAnalyzerList results={job.externalEnrichment.email} emptyMessage="No external email analyzer results." />
+                </div>
+                <div>
+                  <div className="uppercase text-xs opacity-70 mb-2">Observable analyzers</div>
+                  <ExternalAnalyzerList results={job.externalEnrichment.observables} emptyMessage="No external observable analyzer results." />
+                </div>
+                <div>
+                  <div className="uppercase text-xs opacity-70 mb-2">Attachment analyzers</div>
+                  <ExternalAnalyzerList results={job.externalEnrichment.attachments} emptyMessage="No external attachment analyzer results." />
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           <div className="cli-border p-4">
             <h4 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4 flex items-center">
               <Paperclip className="mr-2" size={18} /> Attachment Analysis
@@ -292,6 +355,8 @@ export function ThePhish() {
                           ))}
                         </div>
                       ) : null}
+                      <AttachmentExternalScans result={result} />
+                      <AttachmentIocEnrichment result={result} />
                     </SignalPanel>
                   </div>
                 ))}
@@ -336,5 +401,287 @@ function formatIgnoredAttachmentReason(reason: EmlAnalysisJob['ignoredAttachment
       return 'total size limit';
     default:
       return reason;
+  }
+}
+
+function ExternalAnalyzerList({
+  results,
+  emptyMessage,
+}: {
+  results: NonNullable<EmlAnalysisJob['externalEnrichment']>['email'];
+  emptyMessage: string;
+}) {
+  if (results.length === 0) {
+    return <p className="opacity-70 text-xs">{emptyMessage}</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {results.map((result) => (
+        <div key={`${result.analyzerId}-${result.target}`}>
+          <SignalPanel tone={toneFromExternalVerdict(result.verdict)} className="p-3 space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="font-bold break-all">{result.analyzerName}</div>
+                <div className="text-xs opacity-70 break-all">{result.target}</div>
+              </div>
+              <div className="flex flex-wrap gap-2 justify-end">
+                <SignalBadge tone="neutral">{result.targetType}</SignalBadge>
+                <SignalBadge tone={toneFromScannerStatus(result.status)}>{result.status}</SignalBadge>
+                <SignalBadge tone={toneFromExternalVerdict(result.verdict)}>{result.verdict}</SignalBadge>
+              </div>
+            </div>
+            <div className="text-xs opacity-90">{result.summary}</div>
+            {result.confidence !== null ? <div className="text-[11px] opacity-80">Confidence: {result.confidence}%</div> : null}
+            {result.taxonomies.length > 0 ? (
+              <div className="space-y-1">
+                <div className="text-[11px] uppercase opacity-70">Taxonomies</div>
+                <div className="flex flex-wrap gap-2">
+                  {result.taxonomies.map((taxonomy, index) => (
+                    <div key={`${taxonomy.namespace}-${taxonomy.predicate}-${taxonomy.value}-${index}`}>
+                      <SignalBadge tone={toneFromExternalTaxonomy(taxonomy.level)}>
+                        {formatTaxonomy(taxonomy)}
+                      </SignalBadge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {result.artifacts.length > 0 ? (
+              <div className="space-y-1">
+                <div className="text-[11px] uppercase opacity-70">Artifacts</div>
+                <div className="space-y-1 text-[11px] opacity-80">
+                  {result.artifacts.map((artifact, index) => (
+                    <div key={`${artifact.dataType}-${artifact.data}-${index}`} className="break-all">
+                      {artifact.dataType}: {artifact.data}
+                      {artifact.message ? ` :: ${artifact.message}` : ''}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {result.reference ? <div className="text-[11px] opacity-60 break-all">Ref: {result.reference}</div> : null}
+          </SignalPanel>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PanelList({
+  title,
+  values,
+  emptyMessage,
+  tone = 'neutral',
+}: {
+  title: string;
+  values: string[];
+  emptyMessage: string;
+  tone?: 'safe' | 'warning' | 'neutral';
+}) {
+  return (
+    <div>
+      <div className="uppercase text-xs opacity-70 mb-2">{title}</div>
+      {values.length === 0 ? (
+        <p className="text-xs opacity-70">{emptyMessage}</p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {values.map((value) => (
+            <div key={value}>
+              <SignalBadge tone={tone} className="break-all max-w-full">
+                {value}
+              </SignalBadge>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RelatedDomainList({ domains }: { domains: NonNullable<EmlAnalysisJob['emailAnalysis']>['relatedDomains'] }) {
+  return (
+    <div>
+      <div className="uppercase text-xs opacity-70 mb-2">Related Domains</div>
+      {domains.length === 0 ? (
+        <p className="text-xs opacity-70">No related domains analyzed.</p>
+      ) : (
+        <div className="space-y-2">
+          {domains.map((entry) => (
+            <div key={`${entry.domain}-${entry.relation}`}>
+              <SignalPanel tone={toneFromRiskLevel(entry.analysis.riskLevel)} className="p-3 text-xs space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-bold break-all">{entry.domain}</div>
+                  <div className="flex flex-wrap gap-2">
+                    <SignalBadge tone="neutral">{entry.relation}</SignalBadge>
+                    <SignalBadge tone={toneFromRiskLevel(entry.analysis.riskLevel)}>{entry.analysis.riskLevel}</SignalBadge>
+                    <SignalBadge tone={toneFromRiskScore(entry.analysis.score)}>{entry.analysis.score}</SignalBadge>
+                  </div>
+                </div>
+                <div className="opacity-85">{entry.analysis.summary}</div>
+              </SignalPanel>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExternalAnalyzerOverview({ enrichment }: { enrichment: NonNullable<EmlAnalysisJob['externalEnrichment']> }) {
+  const allResults = [...enrichment.email, ...enrichment.observables, ...enrichment.attachments];
+  const completed = allResults.filter((result) => result.status === 'completed').length;
+  const malicious = allResults.filter((result) => result.verdict === 'malicious').length;
+  const suspicious = allResults.filter((result) => result.verdict === 'suspicious').length;
+  const unavailable = allResults.filter((result) => result.status === 'unavailable' || result.verdict === 'unavailable').length;
+
+  return (
+    <div className="flex flex-wrap gap-2 mb-4 text-xs">
+      <SignalBadge tone="neutral">Analyzer runs: {allResults.length}</SignalBadge>
+      <SignalBadge tone="safe">Completed: {completed}</SignalBadge>
+      <SignalBadge tone={malicious > 0 ? 'warning' : 'neutral'}>Malicious hits: {malicious}</SignalBadge>
+      <SignalBadge tone={suspicious > 0 ? 'warning' : 'neutral'}>Suspicious hits: {suspicious}</SignalBadge>
+      <SignalBadge tone={unavailable > 0 ? 'warning' : 'neutral'}>Unavailable: {unavailable}</SignalBadge>
+    </div>
+  );
+}
+
+function AttachmentExternalScans({ result }: { result: FileStaticAnalysisResult }) {
+  const hasCortex = Boolean(result.externalScans.cortex);
+
+  return (
+    <div className="mt-4 space-y-2 text-xs">
+      <div className="uppercase opacity-70">External Scans</div>
+      <div className="flex flex-wrap gap-2">
+        <SignalBadge tone={toneFromScannerStatus(result.externalScans.virustotal.status)}>
+          VirusTotal {result.externalScans.virustotal.status}
+        </SignalBadge>
+        {result.externalScans.virustotal.malicious !== null || result.externalScans.virustotal.suspicious !== null ? (
+          <SignalBadge tone={toneFromScannerStatus(result.externalScans.virustotal.status)}>
+            {result.externalScans.virustotal.malicious ?? 0} malicious / {result.externalScans.virustotal.suspicious ?? 0} suspicious
+          </SignalBadge>
+        ) : null}
+        <SignalBadge tone={toneFromScannerStatus(result.externalScans.clamav.status)}>ClamAV {result.externalScans.clamav.status}</SignalBadge>
+        <SignalBadge tone={toneFromScannerStatus(result.externalScans.yara.status)}>YARA {result.externalScans.yara.status}</SignalBadge>
+        {hasCortex ? (
+          <SignalBadge tone={toneFromScannerStatus(result.externalScans.cortex?.status)}>
+            Cortex {result.externalScans.cortex?.status}
+          </SignalBadge>
+        ) : null}
+      </div>
+      {hasCortex ? <div className="opacity-80">{result.externalScans.cortex?.summary}</div> : null}
+      {result.externalScans.clamav.signature ? <div className="opacity-80">ClamAV signature: {result.externalScans.clamav.signature}</div> : null}
+      {result.externalScans.yara.rules.length > 0 ? <div className="opacity-80">YARA rules: {result.externalScans.yara.rules.join(', ')}</div> : null}
+    </div>
+  );
+}
+
+function AttachmentIocEnrichment({ result }: { result: FileStaticAnalysisResult }) {
+  return (
+    <div className="mt-4 space-y-2 text-xs">
+      <div className="uppercase opacity-70">IOC Enrichment</div>
+      <div className="flex flex-wrap gap-2">
+        <SignalBadge tone={toneFromScannerStatus(result.iocEnrichment.status)}>{result.iocEnrichment.status}</SignalBadge>
+        <SignalBadge tone="neutral">URLs: {result.iocEnrichment.extractedUrls.length}</SignalBadge>
+        <SignalBadge tone="neutral">Domains: {result.iocEnrichment.extractedDomains.length}</SignalBadge>
+        <SignalBadge tone="neutral">Hits: {result.iocEnrichment.results.length}</SignalBadge>
+      </div>
+      <div className="opacity-80">{result.iocEnrichment.summary}</div>
+      {result.iocEnrichment.results.length > 0 ? (
+        <div className="space-y-2">
+          {result.iocEnrichment.results.map((ioc, index) => (
+            <div key={`${ioc.type}-${ioc.value}-${index}`}>
+              <SignalPanel tone={toneFromIocVerdict(ioc.verdict)} className="p-3 space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="font-bold break-all">{ioc.value}</div>
+                  <div className="flex flex-wrap gap-2">
+                    <SignalBadge tone="neutral">{ioc.type}</SignalBadge>
+                    <SignalBadge tone={toneFromIocVerdict(ioc.verdict)}>{ioc.verdict}</SignalBadge>
+                  </div>
+                </div>
+                <div className="opacity-85">{ioc.summary}</div>
+                <div className="flex flex-wrap gap-2">
+                  {ioc.providerResults.map((provider, providerIndex) => (
+                    <div key={`${provider.provider}-${providerIndex}`}>
+                      <SignalBadge tone={toneFromScannerStatus(provider.status)}>
+                        {formatProviderName(provider.provider)} {provider.status}
+                      </SignalBadge>
+                    </div>
+                  ))}
+                </div>
+              </SignalPanel>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function toneFromExternalTaxonomy(level: string | null) {
+  const normalizedLevel = level?.toLowerCase();
+
+  if (normalizedLevel === 'malicious' || normalizedLevel === 'high' || normalizedLevel === 'suspicious') {
+    return 'warning';
+  }
+
+  if (normalizedLevel === 'safe' || normalizedLevel === 'info') {
+    return 'safe';
+  }
+
+  return 'neutral';
+}
+
+function toneFromIocVerdict(verdict: FileStaticAnalysisResult['iocEnrichment']['results'][number]['verdict']) {
+  switch (verdict) {
+    case 'malicious':
+    case 'suspicious':
+      return 'warning';
+    case 'clean':
+      return 'safe';
+    case 'unavailable':
+    case 'pending':
+    default:
+      return 'neutral';
+  }
+}
+
+function formatTaxonomy(taxonomy: CortexAnalyzerResult['taxonomies'][number]) {
+  return [taxonomy.namespace, taxonomy.predicate, taxonomy.value].filter(Boolean).join(' / ');
+}
+
+function formatProviderName(provider: FileIocProviderResult['provider']) {
+  switch (provider) {
+    case 'abuseipdb':
+      return 'AbuseIPDB';
+    case 'alienvault':
+      return 'AlienVault OTX';
+    case 'cortex':
+      return 'Cortex';
+    case 'urlhaus':
+      return 'URLhaus';
+    case 'urlhaus_host':
+      return 'URLhaus Host';
+    case 'urlscan':
+      return 'URLScan';
+    case 'virustotal':
+      return 'VirusTotal';
+    default:
+      return provider;
+  }
+}
+
+function toneFromExternalVerdict(verdict: NonNullable<EmlAnalysisJob['externalEnrichment']>['email'][number]['verdict']) {
+  switch (verdict) {
+    case 'malicious':
+    case 'suspicious':
+      return 'warning';
+    case 'clean':
+      return 'safe';
+    case 'informational':
+    case 'pending':
+    case 'unavailable':
+    default:
+      return 'neutral';
   }
 }

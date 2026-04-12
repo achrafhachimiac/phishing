@@ -80,6 +80,54 @@ describe('createFileAnalysisJob', () => {
     );
   }, 10000);
 
+  it('adds Cortex hash reputation to the file result when configured', async () => {
+    const suspiciousPdf = Buffer.from('%PDF-1.7\n1 0 obj\n/JavaScript https://evil.example/login\n/OpenAction\n');
+
+    const job = await createFileAnalysisJob(
+      [
+        {
+          filename: 'invoice.pdf',
+          contentBase64: suspiciousPdf.toString('base64'),
+          contentType: 'application/pdf',
+        },
+      ],
+      undefined,
+      async () => ({
+        status: 'clean',
+        malicious: 0,
+        suspicious: 0,
+        reference: null,
+      }),
+      () => 'job_file_cortex',
+      async () => ({
+        enrichment: {
+          status: 'completed',
+          extractedUrls: ['https://evil.example/login'],
+          extractedDomains: ['evil.example'],
+          results: [],
+          summary: 'Checked 1 extracted IOC with no malicious listings returned.',
+          updatedAt: '2026-04-12T12:00:00.000Z',
+        },
+        indicators: [],
+      }),
+      async () => ({
+        status: 'malicious',
+        analyzerCount: 2,
+        matchedAnalyzerCount: 1,
+        summary: 'Cortex found prior malicious reputation for this file hash.',
+      }),
+    );
+
+    expect(job.results[0].externalScans.cortex).toEqual(expect.objectContaining({
+      status: 'malicious',
+      analyzerCount: 2,
+      matchedAnalyzerCount: 1,
+    }));
+    expect(job.results[0].indicators).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'cortex_malicious' }),
+    ]));
+  });
+
   it('parses Office OpenXML containers and flags embedded macro payloads', async () => {
     const zip = new JSZip();
     zip.file('[Content_Types].xml', '<Types></Types>');
