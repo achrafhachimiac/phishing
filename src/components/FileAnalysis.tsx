@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Cpu, FileArchive, Upload } from 'lucide-react';
 
-import type { FileAnalysisJob, FileUpload } from '../../shared/analysis-types';
+import type { ArchiveTreeNode, ExtractedArchiveTree, FileAnalysisJob, FileIocEnrichment, FileUpload } from '../../shared/analysis-types';
 import { formatSignalLabel } from './signal-format';
 import {
   SignalBadge,
@@ -181,6 +181,12 @@ export function FileAnalysis() {
                           {result.riskScore}
                         </SignalBadge>
                       </div>
+                      <RiskScoreBreakdownCard
+                        totalScore={result.riskScoreBreakdown.totalScore}
+                        factors={result.riskScoreBreakdown.factors}
+                        suspiciousThreshold={result.riskScoreBreakdown.thresholds.suspicious}
+                        maliciousThreshold={result.riskScoreBreakdown.thresholds.malicious}
+                      />
 
                       <div className="flex flex-wrap items-center gap-2">
                         <span>VirusTotal:</span>
@@ -228,6 +234,10 @@ export function FileAnalysis() {
                         )) : <div className="opacity-70">None extracted</div>}
                       </div>
                       <div>
+                        <div className="text-xs opacity-70 uppercase mb-2">IOC Enrichment</div>
+                        <IocEnrichmentCard enrichment={result.iocEnrichment} />
+                      </div>
+                      <div>
                         <div className="text-xs opacity-70 uppercase mb-2">Specialized Parsers</div>
                         {parserReports.length ? parserReports.map((report) => (
                           <div key={`${report.parser}-${report.summary}`}>
@@ -247,6 +257,12 @@ export function FileAnalysis() {
                                       <pre key={snippet} className="overflow-x-auto whitespace-pre-wrap border border-orange-400/40 bg-black/70 p-2 text-xs opacity-90 text-orange-200">{snippet}</pre>
                                     ))}
                                   </div>
+                                </div>
+                              ) : null}
+                              {report.extractedTree ? (
+                                <div className="mt-3">
+                                  <div className="text-xs opacity-70 uppercase mb-2">Archive Tree</div>
+                                  <ArchiveTreeCard tree={report.extractedTree} />
                                 </div>
                               ) : null}
                             </SignalPanel>
@@ -293,4 +309,173 @@ async function fileToPayload(file: File): Promise<FileUpload> {
     contentType: file.type || null,
     contentBase64: btoa(binary),
   };
+}
+
+function RiskScoreBreakdownCard(props: {
+  totalScore: number;
+  suspiciousThreshold: number;
+  maliciousThreshold: number;
+  factors: Array<{
+    label: string;
+    severity: 'low' | 'medium' | 'high';
+    contribution: number;
+    evidence: string;
+  }>;
+}) {
+  const filledColumns = Math.max(1, Math.round(props.totalScore / 10));
+
+  return (
+    <SignalPanel tone={toneFromRiskScore(props.totalScore)} className="mt-3">
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-xs uppercase opacity-70">Risk Score Breakdown</div>
+          <SignalBadge tone={toneFromRiskScore(props.totalScore)}>{props.totalScore}/100</SignalBadge>
+        </div>
+        <div className="grid grid-cols-10 gap-1">
+          {Array.from({ length: 10 }, (_, index) => (
+            <div
+              key={`risk-bar-${index}`}
+              className={`h-2 rounded-sm border ${index < filledColumns ? 'border-orange-300 bg-orange-300/80' : 'border-white/20 bg-white/5'}`}
+            />
+          ))}
+        </div>
+        <div className="text-xs opacity-80">
+          Suspicious at {props.suspiciousThreshold}+ points. Malicious at {props.maliciousThreshold}+ points.
+        </div>
+        <div className="space-y-2">
+          {props.factors.length ? props.factors.map((factor) => (
+            <div key={`${factor.label}-${factor.evidence}`} className="border border-white/10 bg-black/30 p-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SignalText tone={factor.severity === 'low' ? 'neutral' : 'warning'}>{factor.label}</SignalText>
+                <span className="text-xs uppercase opacity-80">+{factor.contribution}</span>
+              </div>
+              <div className="mt-1 text-xs break-all opacity-80">{factor.evidence}</div>
+            </div>
+          )) : <div className="text-xs opacity-70">No contributing factors.</div>}
+        </div>
+      </div>
+    </SignalPanel>
+  );
+}
+
+function ArchiveTreeCard({ tree }: { tree: ExtractedArchiveTree }) {
+  return (
+    <SignalPanel tone={tree.truncated ? 'warning' : 'neutral'}>
+      <div className="space-y-3 text-xs">
+        <div className="flex flex-wrap gap-3 opacity-80">
+          <span>Entries: {tree.totalEntries}</span>
+          <span>Depth: {tree.maxDepth}</span>
+          <span>Size: {tree.totalExtractedSize} bytes</span>
+        </div>
+        {tree.warnings.length ? (
+          <div className="space-y-1">
+            {tree.warnings.map((warning) => (
+              <div key={warning}>
+                <SignalText tone="warning">{warning}</SignalText>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="space-y-1">
+          {tree.root.children.map((node) => (
+            <div key={node.path}>
+              <ArchiveTreeNodeView node={node} depth={0} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </SignalPanel>
+  );
+}
+
+function ArchiveTreeNodeView({ node, depth }: { node: ArchiveTreeNode; depth: number }) {
+  const hasIndicators = node.indicators.length > 0;
+  const hasChildren = node.children.length > 0;
+  const paddingLeft = `${depth * 0.85}rem`;
+
+  if (!hasChildren) {
+    return (
+      <div className="border border-white/10 bg-black/20 p-2" style={{ marginLeft: paddingLeft }}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <SignalText tone={hasIndicators ? 'warning' : 'neutral'}>{node.path}</SignalText>
+          <span className="opacity-60">{node.detectedType ?? 'unknown'}</span>
+        </div>
+        {hasIndicators ? (
+          <div className="mt-1 space-y-1">
+            {node.indicators.map((indicator) => (
+              <div key={`${node.path}-${indicator.kind}-${indicator.value}`} className="text-[11px] break-all opacity-80">
+                {formatSignalLabel(indicator.kind)}: {indicator.value}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <details className="border border-white/10 bg-black/20 p-2" style={{ marginLeft: paddingLeft }} open={depth < 1 || hasIndicators}>
+      <summary className="cursor-pointer list-none flex flex-wrap items-center justify-between gap-2">
+        <SignalText tone={hasIndicators ? 'warning' : 'neutral'}>{node.path}</SignalText>
+        <span className="opacity-60">{node.detectedType ?? (node.isDirectory ? 'directory' : 'unknown')}</span>
+      </summary>
+      {hasIndicators ? (
+        <div className="mt-2 space-y-1">
+          {node.indicators.map((indicator) => (
+            <div key={`${node.path}-${indicator.kind}-${indicator.value}`} className="text-[11px] break-all opacity-80">
+              {formatSignalLabel(indicator.kind)}: {indicator.value}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-2 space-y-1">
+        {node.children.map((child) => (
+          <div key={child.path}>
+            <ArchiveTreeNodeView node={child} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function IocEnrichmentCard({ enrichment }: { enrichment: FileIocEnrichment }) {
+  const flaggedResults = enrichment.results.filter((result) => result.verdict === 'malicious' || result.verdict === 'suspicious');
+
+  return (
+    <SignalPanel tone={toneFromScannerStatus(enrichment.status)} className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <SignalText tone={toneFromScannerStatus(enrichment.status)}>{enrichment.summary}</SignalText>
+        <SignalBadge tone={toneFromScannerStatus(enrichment.status)}>{enrichment.status}</SignalBadge>
+      </div>
+      <div className="flex flex-wrap gap-3 text-xs opacity-80">
+        <span>URLs: {enrichment.extractedUrls.length}</span>
+        <span>Domains: {enrichment.extractedDomains.length}</span>
+        <span>Flagged: {flaggedResults.length}</span>
+      </div>
+      {enrichment.results.length ? (
+        <div className="space-y-2">
+          {enrichment.results.map((result) => (
+            <div key={`${result.type}-${result.value}`} className="border border-white/10 bg-black/30 p-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SignalText tone={toneFromScannerStatus(result.verdict)}>{result.value}</SignalText>
+                <SignalBadge tone={toneFromScannerStatus(result.verdict)}>{result.verdict}</SignalBadge>
+              </div>
+              <div className="mt-1 text-xs opacity-80 break-all">{result.summary}</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {result.providerResults.map((providerResult) => (
+                  <div key={`${result.value}-${providerResult.provider}`} className="border border-white/10 px-2 py-1 text-[11px]">
+                    <div className="uppercase opacity-70">{providerResult.provider}</div>
+                    <SignalText tone={toneFromScannerStatus(providerResult.status)}>{providerResult.status}</SignalText>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs opacity-70">No IOC provider verdicts yet.</div>
+      )}
+    </SignalPanel>
+  );
 }

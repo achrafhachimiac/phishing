@@ -234,8 +234,35 @@ function buildFailedFileAnalysisJob(jobId, files, error) {
         }),
     });
 }
-export async function lookupFileThreatIntel(_hash) {
-    return emptyVirusTotalScan();
+export async function lookupFileThreatIntel(hash) {
+    const apiKey = process.env.VIRUSTOTAL_API_KEY;
+    if (!apiKey) {
+        return { status: 'not_configured', malicious: null, suspicious: null, reference: null };
+    }
+    try {
+        const response = await fetch(`https://www.virustotal.com/api/v3/files/${encodeURIComponent(hash)}`, {
+            headers: { 'x-apikey': apiKey },
+            signal: AbortSignal.timeout(10000),
+        });
+        if (response.status === 404) {
+            return { status: 'clean', malicious: 0, suspicious: 0, reference: null };
+        }
+        if (!response.ok) {
+            return { status: 'unavailable', malicious: null, suspicious: null, reference: null };
+        }
+        const payload = (await response.json());
+        const malicious = payload.data?.attributes?.last_analysis_stats?.malicious ?? 0;
+        const suspicious = payload.data?.attributes?.last_analysis_stats?.suspicious ?? 0;
+        return {
+            status: malicious > 0 || suspicious > 0 ? 'malicious' : 'clean',
+            malicious,
+            suspicious,
+            reference: payload.data?.links?.self ?? null,
+        };
+    }
+    catch {
+        return { status: 'unavailable', malicious: null, suspicious: null, reference: null };
+    }
 }
 async function buildParserReports(context) {
     const reports = [];

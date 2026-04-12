@@ -113,6 +113,10 @@ export function toneFromScannerStatus(status: string | null | undefined): Signal
     return 'safe';
   }
 
+  if (['pending', 'unknown', 'not_configured'].includes(normalizedStatus)) {
+    return 'neutral';
+  }
+
   if (['malicious', 'match', 'listed', 'submitted', 'suspicious', 'fail', 'softfail', 'high', 'critical', 'running', 'queued', 'stopped', 'failed', 'unavailable', 'absent'].includes(normalizedStatus)) {
     return 'warning';
   }

@@ -389,9 +389,83 @@ export const fileIndicatorSchema = z.object({
     'suspicious_script',
     'clamav_match',
     'yara_match',
+    'ioc_malicious_url',
+    'ioc_suspicious_url',
+    'ioc_malicious_domain',
+    'ioc_suspicious_domain',
   ]),
   severity: z.enum(['low', 'medium', 'high']),
   value: z.string(),
+});
+
+export interface ArchiveTreeNode {
+  path: string;
+  filename: string;
+  isDirectory: boolean;
+  size?: number | null;
+  detectedType?: string | null;
+  indicators: z.infer<typeof fileIndicatorSchema>[];
+  children: ArchiveTreeNode[];
+}
+
+export const archiveTreeNodeSchema: z.ZodType<ArchiveTreeNode> = z.lazy(() => z.object({
+  path: z.string(),
+  filename: z.string(),
+  isDirectory: z.boolean(),
+  size: z.number().int().nonnegative().nullable(),
+  detectedType: z.string().nullable(),
+  indicators: z.array(fileIndicatorSchema),
+  children: z.array(archiveTreeNodeSchema),
+}));
+
+export const extractedArchiveTreeSchema = z.object({
+  totalEntries: z.number().int().nonnegative(),
+  maxDepth: z.number().int().nonnegative(),
+  totalExtractedSize: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  warnings: z.array(z.string()),
+  root: archiveTreeNodeSchema,
+});
+
+export const fileRiskFactorSchema = z.object({
+  label: z.string(),
+  severity: z.enum(['low', 'medium', 'high']),
+  contribution: z.number().int().nonnegative(),
+  evidence: z.string(),
+});
+
+export const fileRiskScoreBreakdownSchema = z.object({
+  totalScore: z.number().int().min(0).max(100),
+  thresholds: z.object({
+    suspicious: z.number().int().min(0).max(100),
+    malicious: z.number().int().min(0).max(100),
+  }),
+  factors: z.array(fileRiskFactorSchema),
+});
+
+export const fileIocProviderResultSchema = z.object({
+  provider: z.enum(['urlhaus', 'virustotal', 'urlscan', 'alienvault', 'abuseipdb', 'urlhaus_host']),
+  status: z.enum(['listed', 'malicious', 'suspicious', 'clean', 'submitted', 'not_listed', 'unavailable', 'not_configured']),
+  detail: z.string().nullable(),
+  reference: z.string().nullable(),
+});
+
+export const fileEnrichedIocSchema = z.object({
+  type: z.enum(['url', 'domain']),
+  value: z.string(),
+  derivedFrom: z.string().nullable(),
+  verdict: z.enum(['malicious', 'suspicious', 'clean', 'unavailable', 'pending']),
+  summary: z.string(),
+  providerResults: z.array(fileIocProviderResultSchema),
+});
+
+export const fileIocEnrichmentSchema = z.object({
+  status: z.enum(['pending', 'running', 'completed', 'unavailable']),
+  extractedUrls: z.array(z.string()),
+  extractedDomains: z.array(z.string()),
+  results: z.array(fileEnrichedIocSchema),
+  summary: z.string(),
+  updatedAt: z.string().nullable(),
 });
 
 export const fileArtifactSchema = z.object({
@@ -407,11 +481,12 @@ export const fileParserReportSchema = z.object({
   summary: z.string(),
   details: z.array(z.string()),
   snippets: z.array(z.string()).default([]),
+  extractedTree: extractedArchiveTreeSchema.optional(),
 });
 
 export const fileExternalScanSchema = z.object({
   virustotal: z.object({
-    status: z.enum(['malicious', 'clean', 'unavailable', 'not_configured']),
+    status: z.enum(['pending', 'malicious', 'clean', 'unavailable', 'not_configured']),
     malicious: z.number().int().nullable(),
     suspicious: z.number().int().nullable(),
     reference: z.string().nullable(),
@@ -440,6 +515,8 @@ export const fileStaticAnalysisResultSchema = z.object({
   indicators: z.array(fileIndicatorSchema),
   parserReports: z.array(fileParserReportSchema),
   riskScore: z.number().int().min(0).max(100),
+  riskScoreBreakdown: fileRiskScoreBreakdownSchema,
+  iocEnrichment: fileIocEnrichmentSchema,
   verdict: z.enum(['clean', 'suspicious', 'malicious']),
   summary: z.string(),
   storagePath: z.string().nullable(),
@@ -483,6 +560,12 @@ export type BrowserSandboxJob = z.infer<typeof browserSandboxJobSchema>;
 export type FileUpload = z.infer<typeof fileUploadSchema>;
 export type FileAnalysisRequest = z.infer<typeof fileAnalysisRequestSchema>;
 export type FileIndicator = z.infer<typeof fileIndicatorSchema>;
+export type ExtractedArchiveTree = z.infer<typeof extractedArchiveTreeSchema>;
+export type FileRiskFactor = z.infer<typeof fileRiskFactorSchema>;
+export type FileRiskScoreBreakdown = z.infer<typeof fileRiskScoreBreakdownSchema>;
+export type FileIocProviderResult = z.infer<typeof fileIocProviderResultSchema>;
+export type FileEnrichedIoc = z.infer<typeof fileEnrichedIocSchema>;
+export type FileIocEnrichment = z.infer<typeof fileIocEnrichmentSchema>;
 export type FileArtifact = z.infer<typeof fileArtifactSchema>;
 export type FileParserReport = z.infer<typeof fileParserReportSchema>;
 export type FileExternalScan = z.infer<typeof fileExternalScanSchema>;

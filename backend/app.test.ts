@@ -757,6 +757,51 @@ describe('backend app', () => {
               },
             ],
             riskScore: 20,
+            riskScoreBreakdown: {
+              totalScore: 20,
+              thresholds: {
+                suspicious: 25,
+                malicious: 70,
+              },
+              factors: [
+                {
+                  label: 'Embedded URL',
+                  severity: 'medium',
+                  contribution: 20,
+                  evidence: '1 embedded URL(s)',
+                },
+              ],
+            },
+            iocEnrichment: {
+              status: 'completed',
+              extractedUrls: ['https://example.org'],
+              extractedDomains: ['example.org'],
+              results: [
+                {
+                  type: 'url',
+                  value: 'https://example.org',
+                  derivedFrom: null,
+                  verdict: 'clean',
+                  summary: 'https://example.org was checked against 2 IOC providers with no malicious listings.',
+                  providerResults: [
+                    {
+                      provider: 'urlhaus',
+                      status: 'not_listed',
+                      detail: null,
+                      reference: null,
+                    },
+                    {
+                      provider: 'virustotal',
+                      status: 'clean',
+                      detail: '0 malicious, 0 suspicious engine verdict(s)',
+                      reference: null,
+                    },
+                  ],
+                },
+              ],
+              summary: 'Checked 1 extracted IOC with no malicious listings returned.',
+              updatedAt: '2026-04-12T12:00:00.000Z',
+            },
             verdict: 'clean',
             summary: 'No high-confidence malicious indicators were found during static analysis.',
             storagePath: 'storage/uploads/file_job_123/00-invoice.pdf',

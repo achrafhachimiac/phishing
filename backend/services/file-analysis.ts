@@ -1,35 +1,46 @@
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 
+import { path7za } from '7zip-bin';
 import JSZip from 'jszip';
+import * as tar from 'tar';
 
 import {
+  type ArchiveTreeNode,
+  type ExtractedArchiveTree,
   fileAnalysisJobSchema,
   type FileArtifact,
   type FileAnalysisJob,
   type FileExternalScan,
   type FileIndicator,
+  type FileIocEnrichment,
   type FileParserReport,
+  type FileRiskScoreBreakdown,
   type FileStaticAnalysisResult,
   type FileUpload,
 } from '../../shared/analysis-types.js';
 import { appConfig } from '../config.js';
 import { getStoragePaths } from '../storage.js';
+import { buildPendingIocEnrichment, buildUnavailableIocEnrichment, enrichFileIocs } from './file-ioc-enrichment.js';
 
 type AnalyzeUploadedFile = (
   file: FileUpload,
   context: { jobId: string; index: number },
 ) => Promise<FileStaticAnalysisResult>;
 type EnrichFileWithThreatIntel = (hash: string) => Promise<FileExternalScan['virustotal']>;
+type EnrichExtractedIocs = (urls: string[]) => Promise<{ enrichment: FileIocEnrichment; indicators: FileIndicator[] }>;
 type RunScannerCommand = (command: string) => Promise<{ stdout: string; stderr: string }>;
 
 const execAsync = promisify(exec);
 
 const fileAnalysisJobs = new Map<string, FileAnalysisJob>();
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_ARCHIVE_RECURSION_DEPTH = 2;
+const MAX_ARCHIVE_ENTRIES = 250;
 const EXECUTABLE_EXTENSIONS = new Set(['exe', 'dll', 'scr', 'js', 'jse', 'vbs', 'vbe', 'hta', 'bat', 'cmd', 'ps1']);
 const MACRO_EXTENSIONS = new Set(['docm', 'xlsm', 'pptm']);
 
@@ -47,6 +58,7 @@ export async function enqueueFileAnalysisJob(
   analyzeUploadedFile: AnalyzeUploadedFile = analyzeUploadedFileStatically,
   enrichFileWithThreatIntel: EnrichFileWithThreatIntel = lookupFileThreatIntel,
   createJobId: () => string = randomUUID,
+  enrichExtractedIocs: EnrichExtractedIocs = enrichFileIocs,
 ): Promise<FileAnalysisJob> {
   const normalizedFiles = normalizeFiles(files);
   const jobId = createJobId();
@@ -60,7 +72,7 @@ export async function enqueueFileAnalysisJob(
   fileAnalysisJobs.set(jobId, queuedJob);
   queueMicrotask(async () => {
     try {
-      await runFileAnalysisJob(jobId, normalizedFiles, analyzeUploadedFile, enrichFileWithThreatIntel);
+      await runFileAnalysisJob(jobId, normalizedFiles, analyzeUploadedFile, enrichFileWithThreatIntel, enrichExtractedIocs);
     } catch (error) {
       fileAnalysisJobs.set(jobId, buildFailedFileAnalysisJob(jobId, normalizedFiles, error));
     }
@@ -78,21 +90,14 @@ export async function createFileAnalysisJob(
   analyzeUploadedFile: AnalyzeUploadedFile = analyzeUploadedFileStatically,
   enrichFileWithThreatIntel: EnrichFileWithThreatIntel = lookupFileThreatIntel,
   createJobId: () => string = randomUUID,
+  enrichExtractedIocs: EnrichExtractedIocs = enrichFileIocs,
 ): Promise<FileAnalysisJob> {
   const normalizedFiles = normalizeFiles(files);
   const jobId = createJobId();
   const results = await Promise.all(
     normalizedFiles.map(async (file, index) => {
       const analysis = await analyzeUploadedFile(file, { jobId, index });
-      const virustotal = await enrichFileWithThreatIntel(analysis.sha256);
-
-      return {
-        ...analysis,
-        externalScans: {
-          ...analysis.externalScans,
-          virustotal,
-        },
-      };
+      return completeFileAnalysisResult(analysis, enrichFileWithThreatIntel, enrichExtractedIocs);
     }),
   );
 
@@ -121,7 +126,7 @@ export async function analyzeUploadedFileStatically(
 
   const sha256 = createHash('sha256').update(buffer).digest('hex');
   const extension = extractExtension(file.filename);
-  const detectedType = detectFileType(buffer, extension);
+  const detectedType = detectFileType(buffer, extension, file.filename);
   const extractedUrls = extractUrls(buffer);
   const indicators: FileIndicator[] = [];
   const parserReports = await buildParserReports({
@@ -177,6 +182,7 @@ export async function analyzeUploadedFileStatically(
     100,
     deduplicatedIndicators.reduce((score, indicator) => score + severityWeight(indicator.severity), 0),
   );
+  const riskScoreBreakdown = buildRiskScoreBreakdown(deduplicatedIndicators, riskScore);
   const verdict = riskScore >= 70 ? 'malicious' : riskScore >= 25 ? 'suspicious' : 'clean';
   const summary = buildStaticAnalysisSummary({
     verdict,
@@ -196,12 +202,14 @@ export async function analyzeUploadedFileStatically(
     indicators: deduplicatedIndicators,
     parserReports,
     riskScore,
+    riskScoreBreakdown,
+    iocEnrichment: buildPendingIocEnrichment(extractedUrls),
     verdict,
     summary,
     storagePath,
     artifacts,
     externalScans: {
-      virustotal: emptyVirusTotalScan(),
+      virustotal: pendingVirusTotalScan(),
       clamav: localScans.clamav,
       yara: localScans.yara,
     },
@@ -213,6 +221,7 @@ async function runFileAnalysisJob(
   files: FileUpload[],
   analyzeUploadedFile: AnalyzeUploadedFile,
   enrichFileWithThreatIntel: EnrichFileWithThreatIntel,
+  enrichExtractedIocs: EnrichExtractedIocs,
 ) {
   fileAnalysisJobs.set(jobId, {
     jobId,
@@ -226,14 +235,21 @@ async function runFileAnalysisJob(
   for (const [index, file] of files.entries()) {
     try {
       const analysis = await analyzeUploadedFile(file, { jobId, index });
-      const virustotal = await enrichFileWithThreatIntel(analysis.sha256);
-      results.push({
-        ...analysis,
-        externalScans: {
-          ...analysis.externalScans,
-          virustotal,
-        },
-      });
+      results.push(analysis);
+      fileAnalysisJobs.set(jobId, fileAnalysisJobSchema.parse({
+        jobId,
+        status: 'running',
+        queuedFiles: files.map((candidate) => candidate.filename),
+        results,
+      }));
+
+      results[results.length - 1] = await completeFileAnalysisResult(analysis, enrichFileWithThreatIntel, enrichExtractedIocs);
+      fileAnalysisJobs.set(jobId, fileAnalysisJobSchema.parse({
+        jobId,
+        status: 'running',
+        queuedFiles: files.map((candidate) => candidate.filename),
+        results,
+      }));
     } catch (error) {
       const decoded = safeDecode(file.contentBase64);
       results.push({
@@ -247,12 +263,14 @@ async function runFileAnalysisJob(
         indicators: [],
         parserReports: [],
         riskScore: 0,
+        riskScoreBreakdown: emptyRiskScoreBreakdown(),
+        iocEnrichment: buildPendingIocEnrichment([]),
         verdict: 'clean',
         summary: error instanceof Error ? error.message : 'File analysis failed unexpectedly.',
         storagePath: null,
         artifacts: [],
         externalScans: {
-          virustotal: emptyVirusTotalScan(),
+          virustotal: pendingVirusTotalScan(),
           clamav: emptyClamAvScan('unavailable'),
           yara: emptyYaraScan('unavailable'),
         },
@@ -292,18 +310,67 @@ function buildFailedFileAnalysisJob(jobId: string, files: FileUpload[], error: u
         indicators: [],
         parserReports: [],
         riskScore: 0,
+        riskScoreBreakdown: emptyRiskScoreBreakdown(),
+        iocEnrichment: buildPendingIocEnrichment([]),
         verdict: 'clean',
         summary: message,
         storagePath: null,
         artifacts: [],
         externalScans: {
-          virustotal: emptyVirusTotalScan(),
+          virustotal: pendingVirusTotalScan(),
           clamav: emptyClamAvScan('unavailable'),
           yara: emptyYaraScan('unavailable'),
         },
       };
     }),
   });
+}
+
+async function completeFileAnalysisResult(
+  analysis: FileStaticAnalysisResult,
+  enrichFileWithThreatIntel: EnrichFileWithThreatIntel,
+  enrichExtractedIocs: EnrichExtractedIocs,
+): Promise<FileStaticAnalysisResult> {
+  const [virustotal, iocCompletion] = await Promise.all([
+    enrichFileWithThreatIntel(analysis.sha256).catch(() => emptyVirusTotalScan()),
+    enrichExtractedIocs(analysis.extractedUrls)
+      .catch((error) => ({
+        enrichment: buildUnavailableIocEnrichment(
+          analysis.extractedUrls,
+          error instanceof Error ? error.message : 'IOC enrichment failed unexpectedly.',
+        ),
+        indicators: [] as FileIndicator[],
+      })),
+  ]);
+  const indicators = deduplicateIndicators([...analysis.indicators, ...iocCompletion.indicators]);
+  const riskScore = Math.min(
+    100,
+    indicators.reduce((score, indicator) => score + severityWeight(indicator.severity), 0),
+  );
+  const verdict = riskScore >= 70 ? 'malicious' : riskScore >= 25 ? 'suspicious' : 'clean';
+
+  return {
+    ...analysis,
+    indicators,
+    riskScore,
+    riskScoreBreakdown: buildRiskScoreBreakdown(indicators, riskScore),
+    iocEnrichment: iocCompletion.enrichment,
+    verdict,
+    summary: buildStaticAnalysisSummary({
+      verdict,
+      indicators,
+      parserReports: analysis.parserReports,
+      scans: {
+        clamav: analysis.externalScans.clamav,
+        yara: analysis.externalScans.yara,
+      },
+      iocEnrichment: iocCompletion.enrichment,
+    }),
+    externalScans: {
+      ...analysis.externalScans,
+      virustotal,
+    },
+  };
 }
 
 export async function lookupFileThreatIntel(hash: string): Promise<FileExternalScan['virustotal']> {
@@ -361,7 +428,7 @@ async function buildParserReports(context: {
   }
 
   if (context.detectedType === 'office-openxml' || context.detectedType === 'zip' || context.detectedType === 'archive') {
-    reports.push(await buildArchiveParserReport(context.buffer, context.detectedType));
+    reports.push(await buildArchiveParserReport(context.buffer, context.detectedType, context.filename, context.extension));
   }
 
   if (context.detectedType === 'pe') {
@@ -405,39 +472,67 @@ function buildPdfParserReport(buffer: Buffer, extractedUrls: string[]): FilePars
   };
 }
 
-async function buildArchiveParserReport(buffer: Buffer, detectedType: string): Promise<FileParserReport> {
+async function buildArchiveParserReport(
+  buffer: Buffer,
+  detectedType: string,
+  filename: string,
+  extension: string | null,
+): Promise<FileParserReport> {
   try {
-    const zip = await JSZip.loadAsync(buffer);
-    const entryNames = Object.keys(zip.files).slice(0, 12);
-    const details = [`Entries: ${entryNames.length}`];
+    const archiveFormat = detectArchiveFormat(buffer, filename, extension);
+    const extractedTree = await buildArchiveTreeForBuffer(buffer, filename, 0, detectedType, filename);
+    const flattenedNodes = flattenArchiveTree(extractedTree.root).filter((node) => !node.isDirectory);
+    const sampleEntries = flattenedNodes.slice(0, 12).map((node) => node.path);
+    const suspiciousNodes = flattenedNodes.filter((node) => node.indicators.length > 0);
+    const details = [
+      `Archive format: ${formatArchiveFormatLabel(archiveFormat)}`,
+      `Entries: ${extractedTree.totalEntries}`,
+      `Max depth: ${extractedTree.maxDepth}`,
+      `Extracted size: ${extractedTree.totalExtractedSize} bytes`,
+    ];
     const snippets: string[] = [];
-    if (entryNames.length) {
-      details.push(`Sample entries: ${entryNames.join(', ')}`);
+
+    if (sampleEntries.length) {
+      details.push(`Sample entries: ${sampleEntries.join(', ')}`);
+    }
+    if (extractedTree.truncated) {
+      details.push(...extractedTree.warnings);
     }
 
-    const macroEntry = entryNames.find((entryName) => /vbaProject\.bin/i.test(entryName));
-    if (macroEntry) {
-      details.push(`Macro payload: ${macroEntry}`);
-      const macroBuffer = await zip.file(macroEntry)?.async('nodebuffer');
-      if (macroBuffer) {
-        snippets.push(...extractPrintableMacroSnippets(macroBuffer));
+    if (detectedType === 'office-openxml' || (detectedType === 'zip' && extension && ['docx', 'xlsx', 'pptx', 'docm', 'xlsm', 'pptm'].includes(extension))) {
+      const zip = await JSZip.loadAsync(buffer);
+      const macroEntry = flattenedNodes.find((node) => /vbaProject\.bin/i.test(node.path));
+      if (macroEntry) {
+        details.push(`Macro payload: ${macroEntry.path}`);
+        const macroFile = zip.file(macroEntry.path.replace(`${filename}::`, '')) ?? zip.file(macroEntry.path);
+        const macroBuffer = await macroFile?.async('nodebuffer');
+        if (macroBuffer) {
+          snippets.push(...extractPrintableMacroSnippets(macroBuffer));
+        }
+      }
+
+      const relCandidates = Object.values(zip.files).filter((entry) => entry.name.endsWith('.rels')).slice(0, 4);
+      for (const candidate of relCandidates) {
+        const content = await candidate.async('text');
+        if (/TargetMode="External"|https?:\/\//i.test(content)) {
+          details.push(`External relationship found in ${candidate.name}`);
+          snippets.push(...extractSnippetMatches(content, [/TargetMode="External"/gi, /https?:\/\/[^\s"']+/gi], 160));
+        }
       }
     }
 
-    const relCandidates = Object.values(zip.files).filter((entry) => entry.name.endsWith('.rels')).slice(0, 4);
-    for (const candidate of relCandidates) {
-      const content = await candidate.async('text');
-      if (/TargetMode="External"|https?:\/\//i.test(content)) {
-        details.push(`External relationship found in ${candidate.name}`);
-        snippets.push(...extractSnippetMatches(content, [/TargetMode="External"/gi, /https?:\/\/[^\s"']+/gi], 160));
+    for (const node of suspiciousNodes.slice(0, 4)) {
+      for (const indicator of node.indicators) {
+        details.push(`Nested indicator (${node.path}): ${indicator.value}`);
       }
     }
 
     return {
       parser: detectedType === 'office-openxml' ? 'office-openxml' : 'archive',
-      summary: `${detectedType === 'office-openxml' ? 'Office OpenXML' : 'Archive'} parser inspected ${Object.keys(zip.files).length} container entr${Object.keys(zip.files).length === 1 ? 'y' : 'ies'}.`,
+      summary: `${detectedType === 'office-openxml' ? 'Office OpenXML' : 'Archive'} parser inspected ${flattenedNodes.length} extracted entr${flattenedNodes.length === 1 ? 'y' : 'ies'}.`,
       details,
       snippets: snippets.slice(0, 5),
+      extractedTree,
     };
   } catch (error) {
     return {
@@ -515,13 +610,16 @@ function buildIndicatorsFromParserReport(report: FileParserReport): FileIndicato
   }
 
   if (report.parser === 'office-openxml' || report.parser === 'archive') {
-    return report.details
+    return [
+      ...report.details
       .filter((detail) => detail.startsWith('Macro payload: '))
       .map((detail) => ({
         kind: 'office_macro' as const,
         severity: 'high' as const,
         value: detail.replace('Macro payload: ', ''),
-      }));
+      })),
+      ...collectArchiveTreeIndicators(report.extractedTree),
+    ];
   }
 
   return [];
@@ -548,8 +646,12 @@ function buildStaticAnalysisSummary(context: {
   indicators: FileIndicator[];
   parserReports: FileParserReport[];
   scans: Pick<FileExternalScan, 'clamav' | 'yara'>;
+  iocEnrichment?: FileIocEnrichment;
 }) {
   if (context.verdict === 'clean') {
+    if (context.iocEnrichment && context.iocEnrichment.status === 'completed') {
+      return `No high-confidence malicious indicators were found during static analysis. ${context.iocEnrichment.summary}`;
+    }
     return 'No high-confidence malicious indicators were found during static analysis.';
   }
 
@@ -564,7 +666,9 @@ function buildStaticAnalysisSummary(context: {
 
   return [
     `Static analysis found ${context.indicators.length} suspicious indicator(s), including ${headline}.`,
-    scanNotes[0] ?? `${context.parserReports.length} specialized parser report(s) were generated.`,
+    context.iocEnrichment && context.iocEnrichment.status === 'completed'
+      ? context.iocEnrichment.summary
+      : scanNotes[0] ?? `${context.parserReports.length} specialized parser report(s) were generated.`,
   ].join(' ');
 }
 
@@ -583,6 +687,560 @@ function buildFileArtifacts(context: {
       size: context.size,
     },
   ];
+}
+
+async function buildArchiveTree(
+  zip: JSZip,
+  archiveLabel: string,
+  archiveDepth: number,
+): Promise<ExtractedArchiveTree> {
+  const warnings: string[] = [];
+  const root: ArchiveTreeNode = createArchiveNode({
+    path: archiveLabel,
+    filename: path.posix.basename(archiveLabel),
+    isDirectory: true,
+    size: null,
+    detectedType: 'archive',
+    indicators: [],
+  });
+  let totalEntries = 0;
+  let totalExtractedSize = 0;
+
+  const entries = Object.values(zip.files)
+    .filter((entry) => !/^__MACOSX\//.test(entry.name) && !/\.DS_Store$/i.test(entry.name))
+    .slice(0, MAX_ARCHIVE_ENTRIES + 1);
+
+  if (entries.length > MAX_ARCHIVE_ENTRIES) {
+    warnings.push(`Archive tree truncated after ${MAX_ARCHIVE_ENTRIES} entries.`);
+  }
+
+  for (const entry of entries.slice(0, MAX_ARCHIVE_ENTRIES)) {
+    const normalizedEntryPath = entry.name.replace(/\/$/, '');
+    if (!normalizedEntryPath) {
+      continue;
+    }
+
+    const segments = normalizedEntryPath.split('/').filter(Boolean);
+    if (segments.length === 0) {
+      continue;
+    }
+
+    if (entry.dir) {
+      upsertArchiveTreeNode(root, segments, {
+        path: normalizedEntryPath,
+        filename: segments[segments.length - 1] ?? normalizedEntryPath,
+        isDirectory: true,
+        size: null,
+        detectedType: 'archive',
+        indicators: [],
+      });
+      totalEntries += 1;
+      continue;
+    }
+
+    const entryBuffer = await entry.async('nodebuffer');
+    totalExtractedSize += entryBuffer.byteLength;
+    totalEntries += 1;
+
+    const extension = extractExtension(normalizedEntryPath);
+    const detectedType = detectFileType(entryBuffer, extension, normalizedEntryPath);
+    const indicators = analyzeArchiveNodeIndicators(entryBuffer, normalizedEntryPath, detectedType, extension);
+    const nodePath = archiveDepth === 0 ? normalizedEntryPath : `${archiveLabel}::${normalizedEntryPath}`;
+    const leafNode = upsertArchiveTreeNode(root, segments, {
+      path: nodePath,
+      filename: segments[segments.length - 1] ?? normalizedEntryPath,
+      isDirectory: false,
+      size: entryBuffer.byteLength,
+      detectedType,
+      indicators,
+    });
+
+    if (isRecursiveArchiveCandidate(detectedType, normalizedEntryPath) && archiveDepth < MAX_ARCHIVE_RECURSION_DEPTH) {
+      try {
+        const childTree = await buildArchiveTreeForBuffer(entryBuffer, nodePath, archiveDepth + 1, detectedType, normalizedEntryPath);
+        leafNode.children = childTree.root.children;
+        totalEntries += childTree.totalEntries;
+        totalExtractedSize += childTree.totalExtractedSize;
+        warnings.push(...childTree.warnings);
+      } catch {
+        warnings.push(`Nested archive ${nodePath} could not be fully extracted.`);
+      }
+    } else if (isRecursiveArchiveCandidate(detectedType, normalizedEntryPath)) {
+      warnings.push(`Nested archive depth limit reached at ${nodePath}.`);
+    }
+  }
+
+  return {
+    totalEntries,
+    maxDepth: computeArchiveTreeDepth(root),
+    totalExtractedSize,
+    truncated: warnings.length > 0,
+    warnings: [...new Set(warnings)],
+    root,
+  };
+}
+
+function createArchiveNode(node: Omit<ArchiveTreeNode, 'children'>): ArchiveTreeNode {
+  return {
+    ...node,
+    children: [],
+  };
+}
+
+function upsertArchiveTreeNode(
+  root: ArchiveTreeNode,
+  segments: string[],
+  leaf: Omit<ArchiveTreeNode, 'children'>,
+): ArchiveTreeNode {
+  let cursor = root;
+  let currentPath = '';
+
+  for (const [index, segment] of segments.entries()) {
+    currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+    const isLeaf = index === segments.length - 1;
+    const existing = cursor.children.find((child) => child.filename === segment);
+    if (existing) {
+      cursor = existing;
+      if (isLeaf) {
+        cursor.path = leaf.path;
+        cursor.isDirectory = leaf.isDirectory;
+        cursor.size = leaf.size;
+        cursor.detectedType = leaf.detectedType;
+        cursor.indicators = leaf.indicators;
+      }
+      continue;
+    }
+
+    const nextNode = createArchiveNode(isLeaf ? leaf : {
+      path: currentPath,
+      filename: segment,
+      isDirectory: true,
+      size: null,
+      detectedType: null,
+      indicators: [],
+    });
+    cursor.children.push(nextNode);
+    cursor = nextNode;
+  }
+
+  return cursor;
+}
+
+function computeArchiveTreeDepth(node: ArchiveTreeNode): number {
+  if (node.children.length === 0) {
+    return 0;
+  }
+
+  return 1 + Math.max(...node.children.map((child) => computeArchiveTreeDepth(child)));
+}
+
+function flattenArchiveTree(node: ArchiveTreeNode): ArchiveTreeNode[] {
+  return [node, ...node.children.flatMap((child) => flattenArchiveTree(child))];
+}
+
+function analyzeArchiveNodeIndicators(
+  buffer: Buffer,
+  entryName: string,
+  detectedType: string,
+  extension: string | null,
+): FileIndicator[] {
+  const indicators: FileIndicator[] = [];
+  const extractedUrls = extractUrls(buffer);
+
+  if (extension && EXECUTABLE_EXTENSIONS.has(extension)) {
+    indicators.push({ kind: 'executable_extension', severity: 'high', value: entryName });
+  }
+  if (extractedUrls.length > 0) {
+    indicators.push({ kind: 'embedded_url', severity: 'medium', value: `${entryName} contains ${extractedUrls.length} embedded URL(s)` });
+  }
+  if (detectedType === 'script') {
+    indicators.push(...buildIndicatorsFromParserReport(buildScriptParserReport(buffer, extension)));
+  }
+  if ((extension && MACRO_EXTENSIONS.has(extension)) || /vbaProject\.bin/i.test(entryName)) {
+    indicators.push({ kind: 'office_macro', severity: 'high', value: entryName });
+  }
+
+  return deduplicateIndicators(indicators);
+}
+
+function collectArchiveTreeIndicators(tree: ExtractedArchiveTree | undefined): FileIndicator[] {
+  if (!tree) {
+    return [];
+  }
+
+  return flattenArchiveTree(tree.root)
+    .flatMap((node) => node.indicators)
+    .filter((indicator) => indicator.kind !== 'embedded_url');
+}
+
+function buildRiskScoreBreakdown(indicators: FileIndicator[], totalScore: number): FileRiskScoreBreakdown {
+  return {
+    totalScore,
+    thresholds: {
+      suspicious: 25,
+      malicious: 70,
+    },
+    factors: indicators
+      .map((indicator) => ({
+        label: formatIndicatorLabel(indicator.kind),
+        severity: indicator.severity,
+        contribution: severityWeight(indicator.severity),
+        evidence: indicator.value,
+      }))
+      .sort((left, right) => right.contribution - left.contribution || left.label.localeCompare(right.label)),
+  };
+}
+
+function emptyRiskScoreBreakdown(): FileRiskScoreBreakdown {
+  return buildRiskScoreBreakdown([], 0);
+}
+
+function formatIndicatorLabel(kind: FileIndicator['kind']): string {
+  const labels: Record<FileIndicator['kind'], string> = {
+    archive: 'Archive Container',
+    clamav_match: 'ClamAV Match',
+    double_extension: 'Double Extension',
+    embedded_url: 'Embedded URL',
+    executable_extension: 'Executable Extension',
+    ioc_malicious_domain: 'IOC Malicious Domain',
+    ioc_malicious_url: 'IOC Malicious URL',
+    ioc_suspicious_domain: 'IOC Suspicious Domain',
+    ioc_suspicious_url: 'IOC Suspicious URL',
+    office_macro: 'Office Macro',
+    pdf_javascript: 'PDF JavaScript',
+    pe_header: 'PE Header',
+    suspicious_script: 'Suspicious Script',
+    yara_match: 'YARA Match',
+  };
+
+  if (labels[kind]) {
+    return labels[kind];
+  }
+
+  return kind
+    .split('_')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+async function buildArchiveTreeForBuffer(
+  buffer: Buffer,
+  archiveLabel: string,
+  archiveDepth: number,
+  detectedType: string,
+  filenameHint: string,
+): Promise<ExtractedArchiveTree> {
+  if (detectedType === 'office-openxml' || isZipBuffer(buffer)) {
+    const zip = await JSZip.loadAsync(buffer);
+    return buildArchiveTree(zip, archiveLabel, archiveDepth);
+  }
+
+  return buildArchiveTreeFromExtractor(buffer, archiveLabel, archiveDepth, filenameHint);
+}
+
+async function buildArchiveTreeFromExtractor(
+  buffer: Buffer,
+  archiveLabel: string,
+  archiveDepth: number,
+  filenameHint: string,
+): Promise<ExtractedArchiveTree> {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'phish-archive-'));
+  const extractionRoot = path.join(tempRoot, 'extracted');
+  const sourceArchivePath = path.join(tempRoot, sanitizeFilename(filenameHint, archiveDepth));
+
+  await fs.mkdir(extractionRoot, { recursive: true });
+  await fs.writeFile(sourceArchivePath, buffer);
+
+  try {
+    await extractArchiveWithBestEffort(sourceArchivePath, extractionRoot, buffer, filenameHint);
+    return buildArchiveTreeFromDirectory(extractionRoot, archiveLabel, archiveDepth);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function buildArchiveTreeFromDirectory(
+  directoryPath: string,
+  archiveLabel: string,
+  archiveDepth: number,
+): Promise<ExtractedArchiveTree> {
+  const warnings: string[] = [];
+  const root: ArchiveTreeNode = createArchiveNode({
+    path: archiveLabel,
+    filename: path.posix.basename(archiveLabel),
+    isDirectory: true,
+    size: null,
+    detectedType: 'archive',
+    indicators: [],
+  });
+  let totalEntries = 0;
+  let totalExtractedSize = 0;
+
+  const visitDirectory = async (currentDirectoryPath: string, relativeParentPath = ''): Promise<void> => {
+    const directoryEntries = (await fs.readdir(currentDirectoryPath, { withFileTypes: true }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const entry of directoryEntries) {
+      if (totalEntries >= MAX_ARCHIVE_ENTRIES) {
+        warnings.push(`Archive tree truncated after ${MAX_ARCHIVE_ENTRIES} entries.`);
+        return;
+      }
+
+      const relativePath = relativeParentPath ? `${relativeParentPath}/${entry.name}` : entry.name;
+      if (!isSafeArchiveEntryPath(relativePath)) {
+        warnings.push(`Skipped unsafe archive entry path ${relativePath}.`);
+        continue;
+      }
+
+      const absolutePath = path.join(currentDirectoryPath, entry.name);
+      const segments = relativePath.split('/').filter(Boolean);
+
+      if (entry.isDirectory()) {
+        upsertArchiveTreeNode(root, segments, {
+          path: relativePath,
+          filename: entry.name,
+          isDirectory: true,
+          size: null,
+          detectedType: 'archive',
+          indicators: [],
+        });
+        totalEntries += 1;
+        await visitDirectory(absolutePath, relativePath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const entryBuffer = await fs.readFile(absolutePath);
+      const extension = extractExtension(relativePath);
+      const detectedType = detectFileType(entryBuffer, extension, relativePath);
+      const indicators = analyzeArchiveNodeIndicators(entryBuffer, relativePath, detectedType, extension);
+      const nodePath = archiveDepth === 0 ? relativePath : `${archiveLabel}::${relativePath}`;
+      const leafNode = upsertArchiveTreeNode(root, segments, {
+        path: nodePath,
+        filename: entry.name,
+        isDirectory: false,
+        size: entryBuffer.byteLength,
+        detectedType,
+        indicators,
+      });
+
+      totalEntries += 1;
+      totalExtractedSize += entryBuffer.byteLength;
+
+      if (isRecursiveArchiveCandidate(detectedType, relativePath) && archiveDepth < MAX_ARCHIVE_RECURSION_DEPTH) {
+        try {
+          const childTree = await buildArchiveTreeForBuffer(entryBuffer, nodePath, archiveDepth + 1, detectedType, relativePath);
+          leafNode.children = childTree.root.children;
+          totalEntries += childTree.totalEntries;
+          totalExtractedSize += childTree.totalExtractedSize;
+          warnings.push(...childTree.warnings);
+        } catch {
+          warnings.push(`Nested archive ${nodePath} could not be fully extracted.`);
+        }
+      } else if (isRecursiveArchiveCandidate(detectedType, relativePath)) {
+        warnings.push(`Nested archive depth limit reached at ${nodePath}.`);
+      }
+    }
+  };
+
+  await visitDirectory(directoryPath);
+
+  return {
+    totalEntries,
+    maxDepth: computeArchiveTreeDepth(root),
+    totalExtractedSize,
+    truncated: warnings.length > 0,
+    warnings: [...new Set(warnings)],
+    root,
+  };
+}
+
+async function extractArchiveWithBestEffort(
+  sourceArchivePath: string,
+  extractionRoot: string,
+  buffer: Buffer,
+  filenameHint: string,
+) {
+  if (selectArchiveExtractionStrategy(buffer, filenameHint) === 'tar') {
+    await extractTarArchive(sourceArchivePath, extractionRoot, filenameHint);
+    return;
+  }
+
+  await validateSevenZipArchivePaths(sourceArchivePath);
+  await runSpawnedProcess(path7za, ['x', sourceArchivePath, `-o${extractionRoot}`, '-y']);
+}
+
+async function extractTarArchive(sourceArchivePath: string, extractionRoot: string, filenameHint: string) {
+  await tar.x({
+    cwd: extractionRoot,
+    file: sourceArchivePath,
+    gzip: isGzipLikeFilename(filenameHint),
+    strict: true,
+    filter: (entryPath) => isSafeArchiveEntryPath(entryPath.replace(/\\/g, '/')),
+  });
+}
+
+async function validateSevenZipArchivePaths(sourceArchivePath: string) {
+  const { stdout } = await runSpawnedProcess(path7za, ['l', '-slt', sourceArchivePath]);
+  const entryPaths = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('Path = '))
+    .map((line) => line.slice('Path = '.length).trim())
+    .filter((entryPath) => entryPath !== sourceArchivePath && entryPath !== path.basename(sourceArchivePath));
+
+  for (const entryPath of entryPaths) {
+    if (!isSafeArchiveEntryPath(entryPath.replace(/\\/g, '/'))) {
+      throw new Error(`Archive contains unsafe path entry: ${entryPath}`);
+    }
+  }
+}
+
+async function runSpawnedProcess(command: string, args: string[]) {
+  await fs.access(command);
+
+  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk: Buffer | string) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+
+      reject(new Error(stderr.trim() || `${path.basename(command)} exited with code ${code ?? 'unknown'}.`));
+    });
+  });
+}
+
+function isRecursiveArchiveCandidate(detectedType: string, filename: string) {
+  return detectedType === 'zip' || detectedType === 'office-openxml' || (detectedType === 'archive' && isArchiveFilename(filename));
+}
+
+function isArchiveFilename(filename: string) {
+  const normalized = filename.toLowerCase();
+  return normalized.endsWith('.zip')
+    || normalized.endsWith('.7z')
+    || normalized.endsWith('.rar')
+    || normalized.endsWith('.tar')
+    || normalized.endsWith('.tar.gz')
+    || normalized.endsWith('.tgz')
+    || normalized.endsWith('.gz');
+}
+
+function isTarLikeFilename(filename: string) {
+  const normalized = filename.toLowerCase();
+  return normalized.endsWith('.tar') || normalized.endsWith('.tar.gz') || normalized.endsWith('.tgz');
+}
+
+function isGzipLikeFilename(filename: string) {
+  const normalized = filename.toLowerCase();
+  return normalized.endsWith('.tar.gz') || normalized.endsWith('.tgz') || normalized.endsWith('.gz');
+}
+
+function isSafeArchiveEntryPath(entryPath: string) {
+  const normalized = entryPath.replace(/\\/g, '/');
+  return normalized.length > 0
+    && !normalized.startsWith('/')
+    && !/^[A-Za-z]:\//.test(normalized)
+    && !normalized.split('/').some((segment) => segment === '..');
+}
+
+function isZipBuffer(buffer: Buffer) {
+  return buffer.subarray(0, 4).toString('latin1') === 'PK\u0003\u0004';
+}
+
+function isSevenZipBuffer(buffer: Buffer) {
+  return buffer.subarray(0, 6).equals(Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]));
+}
+
+function isRarBuffer(buffer: Buffer) {
+  return buffer.subarray(0, 7).equals(Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]))
+    || buffer.subarray(0, 8).equals(Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00]));
+}
+
+function isGzipBuffer(buffer: Buffer) {
+  return buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+}
+
+function isTarBuffer(buffer: Buffer) {
+  return buffer.length > 262 && buffer.subarray(257, 262).toString('ascii') === 'ustar';
+}
+
+function detectArchiveFormat(buffer: Buffer, filename: string, extension: string | null = extractExtension(filename)) {
+  const normalizedFilename = filename.toLowerCase();
+
+  if (isZipBuffer(buffer)) {
+    if (extension && ['docx', 'xlsx', 'pptx', 'docm', 'xlsm', 'pptm'].includes(extension)) {
+      return 'office-openxml' as const;
+    }
+
+    return 'zip' as const;
+  }
+
+  if (isRarBuffer(buffer) || normalizedFilename.endsWith('.rar') || extension === 'rar') {
+    return 'rar' as const;
+  }
+
+  if (isSevenZipBuffer(buffer) || normalizedFilename.endsWith('.7z') || extension === '7z') {
+    return '7z' as const;
+  }
+
+  if (isTarBuffer(buffer) || normalizedFilename.endsWith('.tar') || extension === 'tar') {
+    return 'tar' as const;
+  }
+
+  if (isGzipBuffer(buffer)) {
+    if (normalizedFilename.endsWith('.tar.gz') || normalizedFilename.endsWith('.tgz')) {
+      return 'tar.gz' as const;
+    }
+
+    return 'gzip' as const;
+  }
+
+  if (normalizedFilename.endsWith('.tar.gz') || normalizedFilename.endsWith('.tgz')) {
+    return 'tar.gz' as const;
+  }
+
+  return 'unknown' as const;
+}
+
+function formatArchiveFormatLabel(format: ReturnType<typeof detectArchiveFormat>) {
+  switch (format) {
+    case 'office-openxml':
+      return 'Office OpenXML';
+    case 'tar.gz':
+      return 'TAR.GZ';
+    case '7z':
+      return '7Z';
+    case 'rar':
+      return 'RAR';
+    case 'tar':
+      return 'TAR';
+    case 'gzip':
+      return 'GZIP';
+    case 'zip':
+      return 'ZIP';
+    default:
+      return 'Unknown';
+  }
+}
+
+function selectArchiveExtractionStrategy(buffer: Buffer, filenameHint: string) {
+  const archiveFormat = detectArchiveFormat(buffer, filenameHint);
+  return archiveFormat === 'tar' || archiveFormat === 'tar.gz' || archiveFormat === 'gzip' ? 'tar' : 'seven-zip';
 }
 
 async function runLocalFileScanners(
@@ -732,6 +1390,15 @@ function emptyVirusTotalScan(): FileExternalScan['virustotal'] {
   };
 }
 
+function pendingVirusTotalScan(): FileExternalScan['virustotal'] {
+  return {
+    status: 'pending',
+    malicious: null,
+    suspicious: null,
+    reference: null,
+  };
+}
+
 function emptyClamAvScan(status: FileExternalScan['clamav']['status']): FileExternalScan['clamav'] {
   return {
     status,
@@ -818,7 +1485,8 @@ function hasDoubleExtension(filename: string) {
   return parts.length >= 3;
 }
 
-function detectFileType(buffer: Buffer, extension: string | null) {
+function detectFileType(buffer: Buffer, extension: string | null, filename = '') {
+  const normalizedFilename = filename.toLowerCase();
   const header = buffer.subarray(0, 8).toString('latin1');
   if (header.startsWith('%PDF')) {
     return 'pdf';
@@ -826,13 +1494,19 @@ function detectFileType(buffer: Buffer, extension: string | null) {
   if (buffer.subarray(0, 2).toString('ascii') === 'MZ') {
     return 'pe';
   }
-  if (buffer.subarray(0, 4).toString('latin1') === 'PK\u0003\u0004') {
+  if (isZipBuffer(buffer)) {
     if (extension && ['docx', 'xlsx', 'pptx', 'docm', 'xlsm', 'pptm'].includes(extension)) {
       return 'office-openxml';
     }
     return 'zip';
   }
-  if (extension && ['7z', 'rar', 'zip'].includes(extension)) {
+  if (isSevenZipBuffer(buffer) || isRarBuffer(buffer) || isTarBuffer(buffer) || isGzipBuffer(buffer)) {
+    return 'archive';
+  }
+  if (normalizedFilename.endsWith('.tar.gz') || normalizedFilename.endsWith('.tgz')) {
+    return 'archive';
+  }
+  if (extension && ['7z', 'rar', 'zip', 'tar', 'gz', 'tgz'].includes(extension)) {
     return 'archive';
   }
   if (extension && ['js', 'vbs', 'ps1', 'bat', 'cmd'].includes(extension)) {
@@ -896,6 +1570,12 @@ function extractPrintableMacroSnippets(buffer: Buffer) {
     .filter((line) => suspiciousMarkers.some((marker) => line.toLowerCase().includes(marker.toLowerCase())))
     .slice(0, 5);
 }
+
+export const __fileAnalysisTestUtils = {
+  detectArchiveFormat,
+  detectFileType,
+  selectArchiveExtractionStrategy,
+};
 
 function shellEscape(value: string) {
   return `"${value.replace(/"/g, '\\"')}"`;
