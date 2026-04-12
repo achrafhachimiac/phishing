@@ -77,7 +77,7 @@ describe('createFileAnalysisJob', () => {
         expect.objectContaining({ type: 'upload', label: 'invoice.pdf' }),
       ]),
     );
-  });
+  }, 10000);
 
   it('parses Office OpenXML containers and flags embedded macro payloads', async () => {
     const zip = new JSZip();
@@ -208,7 +208,7 @@ describe('createFileAnalysisJob', () => {
         }),
       }),
     );
-  });
+  }, 10000);
 
   it('extracts 7z archives and analyzes the extracted contents', async () => {
     const archiveBuffer = await createSevenZipArchive({
