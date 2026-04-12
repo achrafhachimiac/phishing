@@ -60,6 +60,9 @@ jobs:
       DEPLOY_SERVICE_NAME: ${{ vars.SYSTEMD_SERVICE || 'phishing' }}
       DEPLOY_APP_NAME: ${{ vars.APP_NAME || 'phishing' }}
       DEPLOY_APP_PORT: ${{ vars.APP_PORT || '4000' }}
+      DEPLOY_ENABLE_CORTEX_RUNTIME_INSTALL: ${{ vars.ENABLE_CORTEX_RUNTIME_INSTALL || '0' }}
+      DEPLOY_ENABLE_CORTEX_RUNTIME_VERIFY: ${{ vars.ENABLE_CORTEX_RUNTIME_VERIFY || '0' }}
+      DEPLOY_ENABLE_CORTEX_VERIFY: ${{ vars.ENABLE_CORTEX_VERIFY || '0' }}
       DEPLOY_ENV_PATH: /tmp/phishing.env
       APP_ENV_FILE_CONTENT: ${{ secrets.APP_ENV_FILE }}
 
@@ -143,6 +146,9 @@ jobs:
           start_command = entries.get('BROWSER_SANDBOX_START_COMMAND', '')
           stop_command = entries.get('BROWSER_SANDBOX_STOP_COMMAND', '')
           access_url = entries.get('BROWSER_SANDBOX_ACCESS_URL_TEMPLATE', '')
+          cortex_enabled = entries.get('CORTEX_ENABLED', '').lower() in {'1', 'true', 'yes', 'on'}
+          cortex_base_url = entries.get('CORTEX_BASE_URL', '')
+          cortex_api_key = entries.get('CORTEX_API_KEY', '')
 
           if provider == 'local-novnc':
             if 'scripts/sandbox/start-local-browser-sandbox.sh' not in start_command:
@@ -157,6 +163,12 @@ jobs:
               errors.append('BROWSER_SANDBOX_STOP_COMMAND must include :sessionDir when BROWSER_SANDBOX_PROVIDER=local-novnc.')
             if ':novncPort' not in access_url:
               errors.append('BROWSER_SANDBOX_ACCESS_URL_TEMPLATE must include :novncPort when BROWSER_SANDBOX_PROVIDER=local-novnc.')
+
+          if cortex_enabled:
+            if not cortex_base_url:
+              errors.append('CORTEX_BASE_URL is required when CORTEX_ENABLED=true.')
+            if not cortex_api_key:
+              errors.append('CORTEX_API_KEY is required when CORTEX_ENABLED=true.')
 
           if errors:
             for error in errors:
@@ -189,5 +201,8 @@ jobs:
             PORT=$DEPLOY_APP_PORT \
             $ENV_FILE_ARG \
             ENABLE_LOCAL_BROWSER_SANDBOX=1 \
+            ENABLE_CORTEX_RUNTIME_INSTALL=$DEPLOY_ENABLE_CORTEX_RUNTIME_INSTALL \
+            ENABLE_CORTEX_RUNTIME_VERIFY=$DEPLOY_ENABLE_CORTEX_RUNTIME_VERIFY \
+            ENABLE_CORTEX_VERIFY=$DEPLOY_ENABLE_CORTEX_VERIFY \
             RELEASE_ARCHIVE=/tmp/phishing-release.tgz \
             /tmp/phishing-remote-deploy.sh"

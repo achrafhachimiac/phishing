@@ -9,6 +9,8 @@ PORT="${PORT:-4000}"
 RELEASE_ARCHIVE="${RELEASE_ARCHIVE:-/tmp/${APP_NAME}-release.tgz}"
 ENV_FILE_PATH="${ENV_FILE_PATH:-}"
 ENABLE_LOCAL_BROWSER_SANDBOX="${ENABLE_LOCAL_BROWSER_SANDBOX:-0}"
+ENABLE_CORTEX_RUNTIME_INSTALL="${ENABLE_CORTEX_RUNTIME_INSTALL:-0}"
+ENABLE_CORTEX_RUNTIME_VERIFY="${ENABLE_CORTEX_RUNTIME_VERIFY:-0}"
 ENABLE_CORTEX_VERIFY="${ENABLE_CORTEX_VERIFY:-0}"
 
 install_node() {
@@ -135,6 +137,14 @@ main() {
     bash "scripts/deploy/install-local-browser-sandbox.sh"
   fi
 
+  if [ "${ENABLE_CORTEX_RUNTIME_INSTALL}" = "1" ] && [ -f "scripts/deploy/install-cortex-runtime.sh" ]; then
+    APP_NAME="${APP_NAME}" \
+    APP_DIR="${APP_DIR}" \
+    APP_SHARED_DIR="${APP_DIR}/shared" \
+    APP_ENV_FILE="${APP_DIR}/shared/.env" \
+    bash "scripts/deploy/install-cortex-runtime.sh"
+  fi
+
   if [ "${ENABLE_LOCAL_BROWSER_SANDBOX}" = "1" ]; then
     setup_novnc_proxy
   fi
@@ -159,6 +169,13 @@ main() {
   if [ $retries -eq 0 ]; then
     echo "Health check failed after waiting" >&2
     exit 1
+  fi
+
+  if [ "${ENABLE_CORTEX_RUNTIME_VERIFY}" = "1" ] && [ -f "${APP_DIR}/current/scripts/deploy/verify-prod-cortex-runtime.sh" ]; then
+    APP_NAME="${APP_NAME}" \
+    APP_DIR="${APP_DIR}" \
+    APP_SHARED_DIR="${APP_DIR}/shared" \
+    bash "${APP_DIR}/current/scripts/deploy/verify-prod-cortex-runtime.sh"
   fi
 
   if [ "${ENABLE_CORTEX_VERIFY}" = "1" ] && [ -f "${APP_DIR}/current/scripts/deploy/verify-prod-cortex.sh" ]; then
