@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Globe, Search, ExternalLink, Activity, Server, AlertTriangle } from 'lucide-react';
 
 import type { DomainAnalysisResponse } from '../../shared/analysis-types';
+import { SignalBadge, SignalPanel, SignalText, isBlinkingSignal, toneFromRiskLevel, toneFromRiskScore, toneFromScannerStatus } from './signal-display';
 
 export function DomainAnalysis() {
   const [domain, setDomain] = useState('');
@@ -39,13 +40,6 @@ export function DomainAnalysis() {
       setIsAnalyzing(false);
     }
   };
-
-  const threatColor =
-    results?.riskLevel === 'HIGH'
-      ? 'text-red-500'
-      : results?.riskLevel === 'MEDIUM'
-        ? 'text-yellow-500'
-        : 'text-green-500';
 
   const dnsEntries = results
     ? [
@@ -100,12 +94,17 @@ export function DomainAnalysis() {
               <span className="font-bold break-all">{results.normalizedDomain}</span>
               
               <span className="opacity-70">Threat Score:</span>
-              <span className={`font-bold ${threatColor} ${results.score > 70 ? 'animate-pulse' : ''}`}>
-                {results.score}/100 {results.score > 70 && <AlertTriangle size={14} className="inline ml-1" />}
+              <span className="flex items-center gap-2">
+                <SignalBadge tone={toneFromRiskScore(results.score)} blink={isBlinkingSignal(toneFromRiskScore(results.score), results.score >= 25)}>
+                  {results.score}/100
+                </SignalBadge>
+                {results.score > 70 && <AlertTriangle size={14} className="inline ml-1 text-orange-400" />}
               </span>
 
               <span className="opacity-70">Risk Level:</span>
-              <span className={`font-bold ${threatColor}`}>{results.riskLevel}</span>
+              <SignalBadge tone={toneFromRiskLevel(results.riskLevel)} blink={isBlinkingSignal(toneFromRiskLevel(results.riskLevel), results.riskLevel !== 'LOW')}>
+                {results.riskLevel}
+              </SignalBadge>
               
               <span className="opacity-70">Creation Date:</span>
               <span>{results.rdap.createdAt ? new Date(results.rdap.createdAt).toLocaleString() : 'Unknown'}</span>
@@ -119,11 +118,17 @@ export function DomainAnalysis() {
 
             <div className="mt-4 pt-4 border-t border-cyber-red-dim">
               <h4 className="text-sm uppercase mb-2 opacity-70">Detected Risk Factors</h4>
-              <ul className="list-disc list-inside text-sm space-y-1">
+              <ul className="text-sm space-y-2">
                 {results.riskFactors.length > 0 ? (
-                  results.riskFactors.map((riskFactor, index) => <li key={index}>{riskFactor}</li>)
+                  results.riskFactors.map((riskFactor, index) => (
+                    <li key={index}>
+                      <SignalPanel tone="warning" blink className="py-2 px-3">
+                        {riskFactor}
+                      </SignalPanel>
+                    </li>
+                  ))
                 ) : (
-                  <li>No explicit risk factors detected.</li>
+                  <li><SignalBadge tone="safe">No explicit risk factors detected</SignalBadge></li>
                 )}
               </ul>
             </div>
@@ -221,13 +226,13 @@ export function DomainAnalysis() {
 
             <div className="cli-border p-4 text-sm space-y-2">
               <h3 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4">Reputation Signals</h3>
-              <div>URLhaus Host: {results.reputation.urlhausHost.status}</div>
-              <div>URLhaus URLs: {results.reputation.urlhausHost.urls.length}</div>
-              <div>AlienVault OTX: {results.reputation.alienVault.status}</div>
-              <div>OTX Pulses: {results.reputation.alienVault.pulseCount ?? 'Unavailable'}</div>
-              <div>VirusTotal: {results.reputation.virustotal.status}</div>
-              <div>URLScan: {results.reputation.urlscan.status}</div>
-              <div>AbuseIPDB: {results.reputation.abuseIpDb.status}</div>
+              <div className="flex flex-wrap items-center gap-2"><span>URLhaus Host:</span><SignalBadge tone={toneFromScannerStatus(results.reputation.urlhausHost.status)} blink={results.reputation.urlhausHost.status === 'listed'}>{results.reputation.urlhausHost.status}</SignalBadge></div>
+              <div>URLhaus URLs: <SignalText tone={results.reputation.urlhausHost.urls.length > 0 ? 'warning' : 'safe'} blink={results.reputation.urlhausHost.urls.length > 0}>{results.reputation.urlhausHost.urls.length}</SignalText></div>
+              <div className="flex flex-wrap items-center gap-2"><span>AlienVault OTX:</span><SignalBadge tone={toneFromScannerStatus(results.reputation.alienVault.status)} blink={results.reputation.alienVault.status === 'listed'}>{results.reputation.alienVault.status}</SignalBadge></div>
+              <div>OTX Pulses: <SignalText tone={(results.reputation.alienVault.pulseCount ?? 0) > 0 ? 'warning' : 'safe'}>{results.reputation.alienVault.pulseCount ?? 'Unavailable'}</SignalText></div>
+              <div className="flex flex-wrap items-center gap-2"><span>VirusTotal:</span><SignalBadge tone={toneFromScannerStatus(results.reputation.virustotal.status)} blink={results.reputation.virustotal.status === 'malicious'}>{results.reputation.virustotal.status}</SignalBadge></div>
+              <div className="flex flex-wrap items-center gap-2"><span>URLScan:</span><SignalBadge tone={toneFromScannerStatus(results.reputation.urlscan.status)} blink={results.reputation.urlscan.status === 'submitted'}>{results.reputation.urlscan.status}</SignalBadge></div>
+              <div className="flex flex-wrap items-center gap-2"><span>AbuseIPDB:</span><SignalBadge tone={toneFromScannerStatus(results.reputation.abuseIpDb.status)} blink={results.reputation.abuseIpDb.status === 'listed'}>{results.reputation.abuseIpDb.status}</SignalBadge></div>
             </div>
 
             <div className="cli-border p-4">

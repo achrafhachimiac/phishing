@@ -7,6 +7,14 @@
   --color-cyber-red: #ff2a2a;
   --color-cyber-red-dim: rgba(255, 42, 42, 0.2);
   --color-cyber-red-glow: rgba(255, 42, 42, 0.5);
+  --color-signal-safe: #38d39f;
+  --color-signal-safe-dim: rgba(56, 211, 159, 0.18);
+  --color-signal-safe-glow: rgba(56, 211, 159, 0.45);
+  --color-signal-warning: #ff9b2f;
+  --color-signal-warning-dim: rgba(255, 155, 47, 0.18);
+  --color-signal-warning-glow: rgba(255, 155, 47, 0.55);
+  --color-signal-neutral: #f5d08a;
+  --color-signal-neutral-dim: rgba(245, 208, 138, 0.16);
 }
 
 body {
@@ -97,4 +105,106 @@ body {
   z-index: 2;
   background-size: 100% 2px, 3px 100%;
   pointer-events: none;
+}
+
+.signal-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-width: 1px;
+  border-style: solid;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.1;
+}
+
+.signal-badge-safe {
+  color: var(--color-signal-safe);
+  border-color: var(--color-signal-safe);
+  background: var(--color-signal-safe-dim);
+  box-shadow: 0 0 10px var(--color-signal-safe-glow);
+}
+
+.signal-badge-warning {
+  color: var(--color-signal-warning);
+  border-color: var(--color-signal-warning);
+  background: var(--color-signal-warning-dim);
+  box-shadow: 0 0 12px var(--color-signal-warning-glow);
+}
+
+.signal-badge-neutral {
+  color: var(--color-signal-neutral);
+  border-color: rgba(245, 208, 138, 0.45);
+  background: var(--color-signal-neutral-dim);
+}
+
+.signal-panel {
+  border-width: 1px;
+  border-style: solid;
+  padding: 0.75rem;
+}
+
+.signal-panel-safe {
+  color: var(--color-signal-safe);
+  border-color: rgba(56, 211, 159, 0.45);
+  background: linear-gradient(180deg, rgba(56, 211, 159, 0.12), rgba(0, 0, 0, 0.35));
+  box-shadow: inset 0 0 18px rgba(56, 211, 159, 0.08), 0 0 14px rgba(56, 211, 159, 0.18);
+}
+
+.signal-panel-warning {
+  color: var(--color-signal-warning);
+  border-color: rgba(255, 155, 47, 0.55);
+  background: linear-gradient(180deg, rgba(255, 155, 47, 0.16), rgba(0, 0, 0, 0.4));
+  box-shadow: inset 0 0 22px rgba(255, 155, 47, 0.08), 0 0 16px rgba(255, 155, 47, 0.24);
+}
+
+.signal-panel-neutral {
+  color: var(--color-signal-neutral);
+  border-color: rgba(245, 208, 138, 0.3);
+  background: rgba(245, 208, 138, 0.05);
+}
+
+.signal-text-safe {
+  color: var(--color-signal-safe);
+}
+
+.signal-text-warning {
+  color: var(--color-signal-warning);
+}
+
+.signal-text-neutral {
+  color: var(--color-signal-neutral);
+}
+
+.signal-blink {
+  animation: signal-blink 1s steps(2, start) infinite;
+}
+
+.signal-blink-soft {
+  animation: signal-blink-soft 1.4s ease-in-out infinite;
+}
+
+@keyframes signal-blink {
+  0%, 49% {
+    opacity: 1;
+    filter: brightness(1);
+  }
+  50%, 100% {
+    opacity: 0.42;
+    filter: brightness(1.35);
+  }
+}
+
+@keyframes signal-blink-soft {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(1.01);
+  }
 }

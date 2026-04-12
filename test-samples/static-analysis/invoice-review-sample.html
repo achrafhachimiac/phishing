@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoice Review</title>
+</head>
+<body>
+  <h1>Invoice Review</h1>
+  <p>This benign sample is intended for static file analysis testing only.</p>
+  <p>It intentionally includes several patterns that a static analyzer may flag:</p>
+  <ul>
+    <li>Inline JavaScript</li>
+    <li>Base64 decoding</li>
+    <li>Use of eval</li>
+    <li>Network request logic</li>
+    <li>DOM event hooks</li>
+  </ul>
+
+  <button id="review-btn">Review Invoice</button>
+
+  <script>
+    const encodedPayload = "Y29uc29sZS5sb2coJ1N0YXRpYyBhbmFseXNpcyB0ZXN0IHBheWxvYWQgZXhlY3V0ZWQnKTs=";
+
+    function decodePayload() {
+      return atob(encodedPayload);
+    }
+
+    async function simulateBeacon() {
+      const target = "https://example.invalid/collect";
+      const body = {
+        source: "static-analysis-test",
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+      };
+
+      try {
+        await fetch(target, {
+          method: "POST",
+          mode: "no-cors",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+      } catch (error) {
+        console.warn("Expected network failure in test sample", error);
+      }
+    }
+
+    document.getElementById("review-btn")?.addEventListener("click", async () => {
+      const payload = decodePayload();
+      eval(payload);
+      await simulateBeacon();
+      alert("Sample executed. This file is for static analysis testing only.");
+    });
+  </script>
+</body>
+</html>

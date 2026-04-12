@@ -121,8 +121,10 @@ describe('FileAnalysis', () => {
     expect(screen.getAllByText(/suspicious/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/embedded pdf javascript markers found/i)).toBeInTheDocument();
     expect(screen.getByText(/https:\/\/evil.example\/login/i)).toBeInTheDocument();
-    expect(screen.getByText(/clamav: malicious/i)).toBeInTheDocument();
-    expect(screen.getByText(/yara: match/i)).toBeInTheDocument();
+    expect(screen.getByText(/clamav:/i)).toBeInTheDocument();
+    expect(screen.getByText('malicious')).toBeInTheDocument();
+    expect(screen.getByText(/yara:/i)).toBeInTheDocument();
+    expect(screen.getByText('match')).toBeInTheDocument();
     expect(screen.getByText(/specialized parsers/i)).toBeInTheDocument();
     expect(screen.getByText(/detected code \/ snippets/i)).toBeInTheDocument();
     expect(screen.getByText(/app.alert\("phish"\)/i)).toBeInTheDocument();

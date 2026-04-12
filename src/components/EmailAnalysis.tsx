@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Mail, Cpu, AlertOctagon, Link as LinkIcon, CheckCircle, XCircle } from 'lucide-react';
 
 import type { EmailAnalysisResponse, UrlAnalysisJob } from '../../shared/analysis-types';
+import { SignalBadge, SignalPanel, SignalText, isBlinkingSignal, toneFromBinaryFlag, toneFromRiskLevel, toneFromScannerStatus } from './signal-display';
 
 const SANDBOX_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const SANDBOX_MAX_POLL_ATTEMPTS = 5;
@@ -102,16 +103,6 @@ export function EmailAnalysis() {
     throw new Error('URL sandbox polling timed out.');
   };
 
-  const getThreatColor = (level: string) => {
-    switch (level?.toUpperCase()) {
-      case 'CRITICAL': return 'text-red-600 animate-pulse font-bold';
-      case 'HIGH': return 'text-red-500 font-bold';
-      case 'MEDIUM': return 'text-yellow-500 font-bold';
-      case 'LOW': return 'text-green-500 font-bold';
-      default: return 'text-cyber-red';
-    }
-  };
-
   const AuthIcon = ({ status }: { status: string }) => {
     const s = status?.toLowerCase();
     if (s === 'pass') return <CheckCircle size={14} className="inline text-green-500 ml-1" />;
@@ -152,9 +143,9 @@ export function EmailAnalysis() {
               </h3>
               <div className="text-right">
                 <div className="text-xs opacity-70 uppercase">Threat Level</div>
-                <div className={`text-2xl tracking-widest ${getThreatColor(analysisResult.threatLevel)}`}>
-                  [{analysisResult.threatLevel}]
-                </div>
+                <SignalBadge tone={toneFromRiskLevel(analysisResult.threatLevel)} blink={isBlinkingSignal(toneFromRiskLevel(analysisResult.threatLevel), analysisResult.threatLevel !== 'LOW')} className="text-base">
+                  {analysisResult.threatLevel}
+                </SignalBadge>
               </div>
             </div>
             <p className="text-sm leading-relaxed border-l-2 border-cyber-red pl-4 opacity-90">
@@ -237,21 +228,23 @@ export function EmailAnalysis() {
                   </div>
                 )}
                 {analysisResult.urls.map((url, idx: number) => (
-                  <div key={idx} className={`p-3 border ${url.suspicious ? 'border-red-500 bg-red-500/10' : 'border-cyber-red-dim bg-black/50'}`}>
-                    <div className="text-xs opacity-70 mb-1">Original:</div>
-                    <div className="text-sm break-all mb-2">{url.originalUrl}</div>
-                    {url.decodedUrl && url.decodedUrl !== url.originalUrl && (
-                      <>
-                        <div className="text-xs opacity-70 mb-1">Decoded/Destination:</div>
-                        <div className="text-sm break-all mb-2 text-yellow-500">{url.decodedUrl}</div>
-                      </>
-                    )}
-                    {url.suspicious && (
-                      <div className="text-xs text-red-400 mt-2 flex items-start">
-                        <AlertOctagon size={12} className="mr-1 mt-0.5 flex-shrink-0" />
-                        <span>{url.reason}</span>
-                      </div>
-                    )}
+                  <div key={idx}>
+                    <SignalPanel tone={toneFromBinaryFlag(url.suspicious)} blink={url.suspicious} className="p-3">
+                      <div className="text-xs opacity-70 mb-1">Original:</div>
+                      <div className="text-sm break-all mb-2">{url.originalUrl}</div>
+                      {url.decodedUrl && url.decodedUrl !== url.originalUrl && (
+                        <>
+                          <div className="text-xs opacity-70 mb-1">Decoded/Destination:</div>
+                          <div className="text-sm break-all mb-2 text-orange-300">{url.decodedUrl}</div>
+                        </>
+                      )}
+                      {url.suspicious && (
+                        <div className="text-xs text-orange-300 mt-2 flex items-start">
+                          <AlertOctagon size={12} className="mr-1 mt-0.5 flex-shrink-0" />
+                          <span>{url.reason}</span>
+                        </div>
+                      )}
+                    </SignalPanel>
                   </div>
                 ))}
                 {sandboxJob?.results.length ? (
@@ -260,9 +253,7 @@ export function EmailAnalysis() {
                       <div key={`${result.originalUrl}-${index}`} className="border border-cyber-red-dim bg-black/40 p-3 text-sm">
                         <div className="flex flex-col md:flex-row md:justify-between gap-2 mb-2">
                           <div className="font-bold break-all">{result.title || result.originalUrl}</div>
-                          <div className={`${result.status === 'completed' ? 'text-green-500' : 'text-red-500'} uppercase font-bold`}>
-                            {result.status}
-                          </div>
+                          <SignalBadge tone={toneFromScannerStatus(result.status)} blink={result.status !== 'completed'}>{result.status}</SignalBadge>
                         </div>
                         <div className="space-y-1 opacity-90">
                           <div>Final URL: {result.finalUrl || 'Unavailable'}</div>
@@ -270,10 +261,10 @@ export function EmailAnalysis() {
                           <div>Trace: {result.tracePath || 'Unavailable'}</div>
                           <div>Redirects: {result.redirectChain.join(' -> ') || 'None observed'}</div>
                           <div>Scripts: {result.scriptUrls.join(', ') || 'None observed'}</div>
-                          <div>URLhaus: {result.externalScans.urlhaus.status}</div>
-                          <div>VirusTotal: {result.externalScans.virustotal.status}</div>
-                          <div>URLScan: {result.externalScans.urlscan.status}</div>
-                          <div>AlienVault OTX: {result.externalScans.alienVault.status}</div>
+                          <div className="flex flex-wrap items-center gap-2"><span>URLhaus:</span><SignalBadge tone={toneFromScannerStatus(result.externalScans.urlhaus.status)} blink={result.externalScans.urlhaus.status === 'listed'}>{result.externalScans.urlhaus.status}</SignalBadge></div>
+                          <div className="flex flex-wrap items-center gap-2"><span>VirusTotal:</span><SignalBadge tone={toneFromScannerStatus(result.externalScans.virustotal.status)} blink={result.externalScans.virustotal.status === 'malicious'}>{result.externalScans.virustotal.status}</SignalBadge></div>
+                          <div className="flex flex-wrap items-center gap-2"><span>URLScan:</span><SignalBadge tone={toneFromScannerStatus(result.externalScans.urlscan.status)} blink={result.externalScans.urlscan.status === 'submitted'}>{result.externalScans.urlscan.status}</SignalBadge></div>
+                          <div className="flex flex-wrap items-center gap-2"><span>AlienVault OTX:</span><SignalBadge tone={toneFromScannerStatus(result.externalScans.alienVault.status)} blink={result.externalScans.alienVault.status === 'listed'}>{result.externalScans.alienVault.status}</SignalBadge></div>
                           {result.error && <div className="text-red-400">Error: {result.error}</div>}
                         </div>
                       </div>
@@ -313,8 +304,9 @@ export function EmailAnalysis() {
                         <div className="font-bold break-all">{entry.domain}</div>
                         <div className="opacity-70 uppercase text-xs">Relation: {entry.relation}</div>
                       </div>
-                      <div className={`font-bold ${getThreatColor(entry.analysis.riskLevel)}`}>
-                        {entry.analysis.riskLevel} / {entry.analysis.score}
+                      <div className="flex items-center gap-2">
+                        <SignalBadge tone={toneFromRiskLevel(entry.analysis.riskLevel)} blink={entry.analysis.riskLevel !== 'LOW'}>{entry.analysis.riskLevel}</SignalBadge>
+                        <SignalText tone={entry.analysis.score >= 25 ? 'warning' : 'safe'} blink={entry.analysis.score >= 25}>{entry.analysis.score}</SignalText>
                       </div>
                     </div>
                     <p className="mt-2 opacity-90">{entry.analysis.summary}</p>

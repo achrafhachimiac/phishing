@@ -165,6 +165,7 @@ describe('DomainAnalysis', () => {
     expect(screen.getByText(/certificate evidence/i)).toBeInTheDocument();
     expect(screen.getByText(/domains: secure-example.test, www.secure-example.test/i)).toBeInTheDocument();
     expect(screen.getByText(/otx pulses/i)).toBeInTheDocument();
-    expect(screen.getByText(/urlhaus host: listed/i)).toBeInTheDocument();
+    expect(screen.getByText(/urlhaus host:/i)).toBeInTheDocument();
+    expect(screen.getAllByText('listed').length).toBeGreaterThan(0);
   }, 10000);
 });

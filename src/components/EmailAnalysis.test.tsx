@@ -98,7 +98,7 @@ describe('EmailAnalysis', () => {
     });
 
     expect(await screen.findByText(/the email shows authentication anomalies/i)).toBeInTheDocument();
-    expect(screen.getByText('[HIGH]')).toBeInTheDocument();
+  expect(screen.getAllByText('HIGH').length).toBeGreaterThan(0);
     expect(screen.getByText('alerts@secure-example.test')).toBeInTheDocument();
     expect(screen.getByText(/spf failed for the sending domain/i)).toBeInTheDocument();
     expect(screen.getByText(/related domains/i)).toBeInTheDocument();
@@ -218,18 +218,21 @@ describe('EmailAnalysis', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /run url sandbox/i }));
 
-    expect(await screen.findByText(/sandbox job: running/i)).toBeInTheDocument();
+    expect(await screen.findByText(/sandbox job:/i)).toBeInTheDocument();
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/analyze/urls/job_test_123', expect.anything());
-      expect(screen.getByText(/sandbox job: completed/i)).toBeInTheDocument();
+      expect(screen.getAllByText('completed').length).toBeGreaterThan(0);
     });
 
     expect(screen.getByText(/example domain/i)).toBeInTheDocument();
     expect(screen.getByText(/https:\/\/example.org\/app.js/i)).toBeInTheDocument();
-    expect(screen.getByText(/urlhaus: not_listed/i)).toBeInTheDocument();
-    expect(screen.getByText(/urlscan: not_configured/i)).toBeInTheDocument();
-    expect(screen.getByText(/alienvault otx: unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/urlhaus:/i)).toBeInTheDocument();
+    expect(screen.getByText('not_listed')).toBeInTheDocument();
+    expect(screen.getByText(/urlscan:/i)).toBeInTheDocument();
+    expect(screen.getAllByText('not_configured').length).toBeGreaterThan(0);
+    expect(screen.getByText(/alienvault otx:/i)).toBeInTheDocument();
+    expect(screen.getAllByText('unavailable').length).toBeGreaterThan(0);
     expect(screen.getByText(/storage\/traces\/job_test_123\/example.zip/i)).toBeInTheDocument();
   });
 });

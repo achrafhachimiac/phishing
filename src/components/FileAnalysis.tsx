@@ -1,7 +1,17 @@
 import React, { useState } from 'react';
-import { AlertOctagon, Cpu, FileArchive, Upload } from 'lucide-react';
+import { Cpu, FileArchive, Upload } from 'lucide-react';
 
 import type { FileAnalysisJob, FileUpload } from '../../shared/analysis-types';
+import { formatSignalLabel } from './signal-format';
+import {
+  SignalBadge,
+  SignalPanel,
+  SignalText,
+  isBlinkingSignal,
+  toneFromFileVerdict,
+  toneFromRiskScore,
+  toneFromScannerStatus,
+} from './signal-display';
 
 const FILE_ANALYSIS_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const FILE_ANALYSIS_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
@@ -149,28 +159,63 @@ export function FileAnalysis() {
                       <div className="text-lg font-bold break-all">{result.filename}</div>
                       <div className="text-xs opacity-70 uppercase">Detected type: {result.detectedType}</div>
                     </div>
-                    <div className={`text-lg font-bold uppercase ${result.verdict === 'malicious' ? 'text-red-500' : result.verdict === 'suspicious' ? 'text-yellow-500' : 'text-green-500'}`}>
+                    <SignalBadge
+                      tone={toneFromFileVerdict(result.verdict)}
+                      blink={isBlinkingSignal(toneFromFileVerdict(result.verdict), result.verdict !== 'clean')}
+                      className="text-sm md:text-base"
+                    >
                       {result.verdict}
-                    </div>
+                    </SignalBadge>
                   </div>
 
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 text-sm">
                     <div className="space-y-2">
                       <div>Summary: {result.summary}</div>
                       <div>SHA256: {result.sha256}</div>
-                      <div>Risk Score: {result.riskScore}</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>Risk Score:</span>
+                        <SignalBadge
+                          tone={toneFromRiskScore(result.riskScore)}
+                          blink={isBlinkingSignal(toneFromRiskScore(result.riskScore), result.riskScore >= 25)}
+                        >
+                          {result.riskScore}
+                        </SignalBadge>
+                      </div>
 
-                      <div>VirusTotal: {result.externalScans.virustotal.status}</div>
-                      <div>ClamAV: {clamav.status}{clamav.signature ? ` (${clamav.signature})` : ''}</div>
-                      <div>YARA: {yara.status}{yara.rules.length ? ` (${yara.rules.join(', ')})` : ''}</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>VirusTotal:</span>
+                        <SignalBadge tone={toneFromScannerStatus(result.externalScans.virustotal.status)}>
+                          {result.externalScans.virustotal.status}
+                        </SignalBadge>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>ClamAV:</span>
+                        <SignalBadge tone={toneFromScannerStatus(clamav.status)} blink={isBlinkingSignal(toneFromScannerStatus(clamav.status), clamav.status === 'malicious')}>
+                          {clamav.status}
+                        </SignalBadge>
+                        {clamav.signature ? <SignalText tone="warning">({clamav.signature})</SignalText> : ''}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>YARA:</span>
+                        <SignalBadge tone={toneFromScannerStatus(yara.status)} blink={isBlinkingSignal(toneFromScannerStatus(yara.status), yara.status === 'match')}>
+                          {yara.status}
+                        </SignalBadge>
+                        {yara.rules.length ? <SignalText tone="warning">({yara.rules.join(', ')})</SignalText> : ''}
+                      </div>
                     </div>
                     <div className="space-y-3">
                       <div>
                         <div className="text-xs opacity-70 uppercase mb-2">Indicators</div>
                         {result.indicators.length ? result.indicators.map((indicator) => (
-                          <div key={`${indicator.kind}-${indicator.value}`} className="border border-cyber-red-dim bg-black/40 p-2 mb-2">
-                            <div className="font-bold uppercase">{indicator.kind}</div>
-                            <div>{indicator.value}</div>
+                          <div key={`${indicator.kind}-${indicator.value}`}>
+                            <SignalPanel
+                              tone={indicator.severity === 'low' ? 'neutral' : indicator.severity === 'medium' ? 'warning' : 'warning'}
+                              blink={indicator.severity !== 'low'}
+                              className="mb-2"
+                            >
+                              <div className="font-bold uppercase">{formatSignalLabel(indicator.kind)}</div>
+                              <div>{indicator.value}</div>
+                            </SignalPanel>
                           </div>
                         )) : <div className="opacity-70">No indicators found</div>}
                       </div>
@@ -185,24 +230,26 @@ export function FileAnalysis() {
                       <div>
                         <div className="text-xs opacity-70 uppercase mb-2">Specialized Parsers</div>
                         {parserReports.length ? parserReports.map((report) => (
-                          <div key={`${report.parser}-${report.summary}`} className="border border-cyber-red-dim bg-black/40 p-2 mb-2">
-                            <div className="font-bold uppercase">{report.parser}</div>
-                            <div>{report.summary}</div>
-                            <div className="mt-2 space-y-1 opacity-80">
-                              {report.details.map((detail) => (
-                                <div key={detail}>{detail}</div>
-                              ))}
-                            </div>
-                            {(report.snippets ?? []).length ? (
-                              <div className="mt-3">
-                                <div className="text-xs opacity-70 uppercase mb-2">Detected Code / Snippets</div>
-                                <div className="space-y-2">
-                                  {(report.snippets ?? []).map((snippet) => (
-                                    <pre key={snippet} className="overflow-x-auto whitespace-pre-wrap border border-cyber-red-dim bg-black/70 p-2 text-xs opacity-90">{snippet}</pre>
-                                  ))}
-                                </div>
+                          <div key={`${report.parser}-${report.summary}`}>
+                            <SignalPanel tone="neutral" className="mb-2">
+                              <div className="font-bold uppercase">{report.parser}</div>
+                              <div>{report.summary}</div>
+                              <div className="mt-2 space-y-1 opacity-80">
+                                {report.details.map((detail) => (
+                                  <div key={detail}>{detail}</div>
+                                ))}
                               </div>
-                            ) : null}
+                              {(report.snippets ?? []).length ? (
+                                <div className="mt-3">
+                                  <div className="text-xs opacity-70 uppercase mb-2">Detected Code / Snippets</div>
+                                  <div className="space-y-2">
+                                    {(report.snippets ?? []).map((snippet) => (
+                                      <pre key={snippet} className="overflow-x-auto whitespace-pre-wrap border border-orange-400/40 bg-black/70 p-2 text-xs opacity-90 text-orange-200">{snippet}</pre>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </SignalPanel>
                           </div>
                         )) : <div className="opacity-70">No parser reports</div>}
                       </div>
@@ -210,9 +257,11 @@ export function FileAnalysis() {
                         <div className="text-xs opacity-70 uppercase mb-2">Artifacts</div>
                         {artifacts.length ? artifacts.map((artifact) => {
                           return (
-                            <div key={`${artifact.type}-${artifact.path}`} className="border border-cyber-red-dim bg-black/40 p-2 mb-2">
-                              <div className="font-bold uppercase">{artifact.type}</div>
-                              <div>{artifact.label}</div>
+                            <div key={`${artifact.type}-${artifact.path}`}>
+                              <SignalPanel tone="neutral" className="mb-2">
+                                <div className="font-bold uppercase">{artifact.type}</div>
+                                <div>{artifact.label}</div>
+                              </SignalPanel>
                             </div>
                           );
                         }) : <div className="opacity-70">No artifacts available</div>}
@@ -225,12 +274,6 @@ export function FileAnalysis() {
             </div>
           ) : null}
 
-          <div className="cli-border p-4 bg-cyber-red-dim/10 text-sm">
-            <div className="flex items-start">
-              <AlertOctagon className="mr-2 mt-0.5 flex-shrink-0" size={16} />
-              <span>This MVP provides static file analysis only. Dynamic detonation in Linux or Windows VMs remains a later phase.</span>
-            </div>
-          </div>
         </div>
       )}
     </div>

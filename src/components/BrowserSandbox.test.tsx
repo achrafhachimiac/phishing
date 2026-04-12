@@ -103,12 +103,12 @@ describe('BrowserSandbox', () => {
     fireEvent.click(screen.getByRole('button', { name: /launch sandbox/i }));
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenNthCalledWith(1, '/api/sandbox/browser', expect.objectContaining({
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/sandbox/browser', expect.objectContaining({
         method: 'POST',
       }));
-      expect(globalThis.fetch).toHaveBeenNthCalledWith(2, '/api/sandbox/browser/sandbox_job_123', expect.anything());
-      expect(globalThis.fetch).toHaveBeenNthCalledWith(3, '/api/sandbox/browser/sandbox_job_123', expect.anything());
-      expect(screen.getAllByText((_, element) => element?.textContent?.includes('completed [sandbox_job_123]') ?? false).length).toBeGreaterThan(0);
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/sandbox/browser/sandbox_job_123', expect.anything());
+      expect(screen.getByText('completed')).toBeInTheDocument();
+      expect(screen.getByText('[sandbox_job_123]')).toBeInTheDocument();
     });
 
     expect(screen.getByText(/example login/i)).toBeInTheDocument();

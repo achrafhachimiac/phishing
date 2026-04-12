@@ -3,6 +3,7 @@ import { AlertOctagon, Cpu, ExternalLink, Globe, MonitorSmartphone } from 'lucid
 
 import type { BrowserSandboxJob } from '../../shared/analysis-types';
 import { isPreviewableImage, toStorageUrl } from './storage-assets';
+import { SignalBadge, SignalPanel, SignalText, toneFromScannerStatus } from './signal-display';
 
 const SANDBOX_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const SANDBOX_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 50 : 120000;
@@ -272,7 +273,10 @@ export function BrowserSandbox() {
               </div>
               <div className="text-right">
                 <div className="text-xs opacity-70 uppercase">Sandbox Job</div>
-                <div className="font-bold uppercase">{sandboxJob.status} [{sandboxJob.jobId}]</div>
+                <div className="flex items-center justify-end gap-2">
+                  <SignalBadge tone={toneFromScannerStatus(sandboxJob.status)} blink={sandboxJob.status !== 'completed'}>{sandboxJob.status}</SignalBadge>
+                  <SignalText tone="neutral">[{sandboxJob.jobId}]</SignalText>
+                </div>
               </div>
             </div>
             <div className="mt-2 text-xs opacity-70">Expires At: {sandboxJob.expiresAt || 'n/a'}</div>
@@ -299,7 +303,7 @@ export function BrowserSandbox() {
                       />
                     </a>
                   ) : null}
-                  <div className="border border-cyber-red-dim p-2 bg-black/40">
+                  <SignalPanel tone={liveAccessUrl ? 'warning' : 'neutral'} blink={Boolean(liveAccessUrl)} className="p-2">
                     <div className="text-xs opacity-70 uppercase mb-1">Provider Note</div>
                     <div>{sandboxJob.result.access.note || 'No provider note.'}</div>
                     {liveAccessUrl ? (
@@ -314,7 +318,7 @@ export function BrowserSandbox() {
                         ) : null}
                       </div>
                     ) : null}
-                  </div>
+                  </SignalPanel>
                   {sandboxJob.result.error && <div className="text-red-400">Error: {sandboxJob.result.error}</div>}
                 </div>
               </div>
