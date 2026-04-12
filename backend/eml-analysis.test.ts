@@ -390,4 +390,122 @@ describe('createEmlAnalysisJob', () => {
     expect(job.externalEnrichment?.attachments).toHaveLength(1);
     expect(job.externalEnrichment?.updatedAt).toBe('2026-04-12T12:00:03.000Z');
   });
+
+  it('waits long enough for attachment analysis completion when enrichment is slow', async () => {
+    let pollCount = 0;
+
+    const job = await createEmlAnalysisJob('slow-attachment.eml', sampleRawEmail, {
+      createJobId: () => 'job_eml_slow',
+      analyzeEmail: async () => ({
+        headers: {
+          from: 'alerts@secure-example.test',
+          to: 'victim@example.org',
+          subject: 'Urgent invoice review',
+          date: 'Tue, 08 Apr 2026 10:00:00 +0000',
+          messageId: '<abc@example.test>',
+          returnPath: 'bounce@secure-example.test',
+        },
+        authentication: {
+          spf: 'fail',
+          dkim: 'pass',
+          dmarc: 'fail',
+        },
+        urls: [],
+        inconsistencies: [],
+        threatLevel: 'LOW',
+        executiveSummary: 'Attachment analysis is still running.',
+        emailAddresses: ['alerts@secure-example.test', 'victim@example.org'],
+        domains: ['secure-example.test'],
+        ipAddresses: [],
+        attachments: [
+          {
+            filename: 'invoice.pdf',
+            contentType: 'application/pdf',
+            size: 32,
+            checksum: 'abc123',
+          },
+        ],
+        relatedDomains: [],
+      }),
+      enqueueFileAnalysisJob: async () => ({
+        jobId: 'file_job_slow',
+        status: 'queued',
+        queuedFiles: ['invoice.pdf'],
+        results: [],
+      }),
+      getFileAnalysisJob: async () => {
+        pollCount += 1;
+
+        if (pollCount < 500) {
+          return {
+            jobId: 'file_job_slow',
+            status: 'running',
+            queuedFiles: ['invoice.pdf'],
+            results: [],
+          };
+        }
+
+        return {
+          jobId: 'file_job_slow',
+          status: 'completed',
+          queuedFiles: ['invoice.pdf'],
+          results: [
+            {
+              filename: 'invoice.pdf',
+              contentType: 'application/pdf',
+              detectedType: 'pdf',
+              extension: 'pdf',
+              size: 32,
+              sha256: 'deadbeef',
+              extractedUrls: [],
+              indicators: [],
+              parserReports: [],
+              riskScore: 10,
+              riskScoreBreakdown: {
+                totalScore: 10,
+                thresholds: { suspicious: 25, malicious: 70 },
+                factors: [],
+              },
+              iocEnrichment: {
+                status: 'completed',
+                extractedUrls: [],
+                extractedDomains: [],
+                results: [],
+                summary: 'No additional IOC hits returned.',
+                updatedAt: '2026-04-12T12:00:00.000Z',
+              },
+              verdict: 'clean',
+              summary: 'Completed after slow enrichment.',
+              storagePath: 'storage/uploads/file_job_slow/00-invoice.pdf',
+              artifacts: [],
+              externalScans: {
+                virustotal: {
+                  status: 'unavailable',
+                  malicious: null,
+                  suspicious: null,
+                  reference: null,
+                },
+                clamav: {
+                  status: 'clean',
+                  signature: null,
+                  engine: null,
+                  detail: null,
+                },
+                yara: {
+                  status: 'clean',
+                  rules: [],
+                  detail: null,
+                },
+              },
+            },
+          ],
+        };
+      },
+      wait: async () => undefined,
+    });
+
+    expect(job.status).toBe('completed');
+    expect(job.fileAnalysisJobId).toBe('file_job_slow');
+    expect(pollCount).toBe(500);
+  });
 });

@@ -39,6 +39,8 @@ const MAX_ANALYZED_ATTACHMENTS = 20;
 const MAX_TOTAL_ANALYZED_ATTACHMENT_SIZE = 25 * 1024 * 1024;
 const MAX_SINGLE_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const FILE_JOB_POLL_INTERVAL_MS = 25;
+const MIN_FILE_JOB_WAIT_MS = 60 * 1000;
+const PER_ATTACHMENT_FILE_JOB_WAIT_MS = 20 * 1000;
 
 export class EmlAnalysisError extends Error {
   code: string;
@@ -159,7 +161,12 @@ async function runEmlAnalysisJob(
     error: null,
   }));
 
-  const completedChildJob = await waitForFileAnalysisJob(childJob.jobId, getFileAnalysisJobHandler, wait);
+  const completedChildJob = await waitForFileAnalysisJob(
+    childJob.jobId,
+    attachmentSelection.files.length,
+    getFileAnalysisJobHandler,
+    wait,
+  );
   if (completedChildJob.status === 'failed') {
     throw new EmlAnalysisError('eml_attachment_analysis_failed', 'Attachment analysis failed before completion.');
   }
@@ -238,7 +245,12 @@ async function buildCompletedEmlJob(
   }
 
   const childJob = await enqueueFileAnalysisHandler(attachmentSelection.files);
-  const completedChildJob = await waitForFileAnalysisJob(childJob.jobId, getFileAnalysisJobHandler, wait);
+  const completedChildJob = await waitForFileAnalysisJob(
+    childJob.jobId,
+    attachmentSelection.files.length,
+    getFileAnalysisJobHandler,
+    wait,
+  );
   if (completedChildJob.status === 'failed') {
     throw new EmlAnalysisError('eml_attachment_analysis_failed', 'Attachment analysis failed before completion.');
   }
@@ -269,10 +281,18 @@ async function buildCompletedEmlJob(
 
 async function waitForFileAnalysisJob(
   jobId: string,
+  attachmentCount: number,
   getFileAnalysisJobHandler: typeof getFileAnalysisJob,
   wait: (milliseconds: number) => Promise<void>,
 ): Promise<FileAnalysisJob> {
-  for (let attempt = 0; attempt < 400; attempt += 1) {
+  const maxAttempts = Math.max(
+    1,
+    Math.ceil(
+      Math.max(MIN_FILE_JOB_WAIT_MS, attachmentCount * PER_ATTACHMENT_FILE_JOB_WAIT_MS) / FILE_JOB_POLL_INTERVAL_MS,
+    ),
+  );
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const job = await getFileAnalysisJobHandler(jobId);
     if (!job) {
       throw new EmlAnalysisError('eml_attachment_job_missing', 'Attachment analysis job could not be found.');
