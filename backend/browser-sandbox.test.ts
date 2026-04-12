@@ -300,6 +300,24 @@ describe('createBrowserSandboxJob', () => {
     expect(expiredJob?.result?.status).toBe('completed');
     expect(expiredJob?.result?.error).toBeNull();
   });
+
+  it('marks a queued job as failed without crashing when sandbox analysis throws', async () => {
+    await enqueueBrowserSandboxJob(
+      'https://example.org',
+      async () => {
+        throw new Error('sandbox launch exploded');
+      },
+      () => 'job_failed_123',
+    );
+
+    await waitForJobState('job_failed_123', (job) => job?.status === 'failed');
+
+    const failedJob = await getBrowserSandboxJob('job_failed_123');
+    expect(failedJob?.status).toBe('failed');
+    expect(failedJob?.result?.status).toBe('failed');
+    expect(failedJob?.result?.error).toBe('sandbox launch exploded');
+    expect(failedJob?.result?.session.runtime).toBeDefined();
+  });
 });
 
 async function waitForJobState(

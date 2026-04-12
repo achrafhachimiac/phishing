@@ -132,15 +132,8 @@ export async function stopBrowserSandboxJob(
           originalUrl: existingJob.requestedUrl,
           finalUrl: null,
           title: null,
-          session: existingJob.session ?? {
-            provider: appConfig.browserSandbox.provider,
-            sessionId: existingJob.jobId,
-            status: 'unavailable',
-            startedAt: new Date().toISOString(),
-            stoppedAt: new Date().toISOString(),
-            access: buildBrowserSandboxAccess(appConfig.browserSandbox, { jobId: existingJob.jobId }),
-          },
-          access: existingJob.session?.access ?? buildBrowserSandboxAccess(appConfig.browserSandbox, { jobId: existingJob.jobId }),
+          session: existingJob.session ?? buildUnavailableSandboxSession(existingJob.jobId, true),
+          access: existingJob.session?.access ?? buildUnavailableSandboxSession(existingJob.jobId, true).access,
           screenshotPath: null,
           tracePath: null,
           redirectChain: [],
@@ -260,15 +253,8 @@ async function runBrowserSandboxJob(
           originalUrl: normalizedUrl,
           finalUrl: null,
           title: null,
-          session: {
-            provider: appConfig.browserSandbox.provider,
-            sessionId: jobId,
-            status: 'unavailable',
-            startedAt: new Date().toISOString(),
-            stoppedAt: null,
-            access: buildBrowserSandboxAccess(appConfig.browserSandbox, { jobId }),
-          },
-          access: buildBrowserSandboxAccess(appConfig.browserSandbox, { jobId }),
+          session: buildUnavailableSandboxSession(jobId),
+          access: buildUnavailableSandboxSession(jobId).access,
           screenshotPath: null,
           tracePath: null,
           redirectChain: [],
@@ -760,6 +746,26 @@ function buildBrowserSandboxArtifacts(
   }
 
   return artifacts;
+}
+
+function buildUnavailableSandboxSession(jobId: string, includeStoppedAt = false): BrowserSandboxSession {
+  const runtime = resolveBrowserSandboxRuntime(jobId, getStoragePaths().sandboxSessions);
+  const access = buildBrowserSandboxAccess(appConfig.browserSandbox, {
+    jobId,
+    displayNumber: runtime.displayNumber,
+    vncPort: runtime.vncPort,
+    novncPort: runtime.novncPort,
+  });
+
+  return {
+    provider: appConfig.browserSandbox.provider,
+    sessionId: jobId,
+    status: 'unavailable',
+    startedAt: new Date().toISOString(),
+    stoppedAt: includeStoppedAt ? new Date().toISOString() : null,
+    runtime,
+    access,
+  };
 }
 
 function normalizePublicUrl(value: string) {
