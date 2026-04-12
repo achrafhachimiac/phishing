@@ -88,6 +88,41 @@ jobs:
             printf '%s' "$APP_ENV_FILE_CONTENT" > app.env
           fi
 
+      - name: Normalize production env file
+        if: env.APP_ENV_FILE_CONTENT != ''
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app.env')
+          raw_lines = path.read_text().splitlines()
+          entries = {}
+          line_indexes = {}
+
+          for index, raw_line in enumerate(raw_lines):
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith('#') or '=' not in raw_line:
+              continue
+            key, value = raw_line.split('=', 1)
+            entries[key] = value
+            line_indexes[key] = index
+
+          if entries.get('BROWSER_SANDBOX_PROVIDER') == 'local-novnc':
+            normalized_values = {
+              'BROWSER_SANDBOX_START_COMMAND': 'bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :cdpPort :sessionDir',
+              'BROWSER_SANDBOX_STOP_COMMAND': 'bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId :sessionDir',
+            }
+
+            for key, normalized_value in normalized_values.items():
+              current_value = entries.get(key, '').strip()
+              if key == 'BROWSER_SANDBOX_START_COMMAND' and current_value == 'bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :sessionDir':
+                raw_lines[line_indexes[key]] = f'{key}={normalized_value}'
+              elif key == 'BROWSER_SANDBOX_STOP_COMMAND' and current_value == 'bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId':
+                raw_lines[line_indexes[key]] = f'{key}={normalized_value}'
+
+          path.write_text('\n'.join(raw_lines) + '\n')
+          PY
+
       - name: Validate production env file
         if: env.APP_ENV_FILE_CONTENT != ''
         run: |
