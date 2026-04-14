@@ -1,17 +1,11 @@
 import { emailAnalysisResponseSchema, type EmailAnalysisResponse } from '../../shared/analysis-types.js';
-import { analyzeDomain, type DomainAnalysisError } from './domain-analysis.js';
 import { parseRawEmail } from './email-parser.js';
-
-type AnalyzeEmailDependencies = {
-  analyzeRelatedDomain?: typeof analyzeDomain;
-};
 
 export async function analyzeEmail(
   rawEmail: string,
-  dependencies: AnalyzeEmailDependencies = {},
+  _dependencies: Record<string, never> = {},
 ): Promise<EmailAnalysisResponse> {
   const parsedEmail = await parseRawEmail(rawEmail);
-  const analyzeRelatedDomain = dependencies.analyzeRelatedDomain ?? analyzeDomain;
   const inconsistencies: string[] = [];
 
   if (parsedEmail.authentication.spf === 'fail') {
@@ -88,17 +82,11 @@ export async function analyzeEmail(
       : 'The email contains limited suspicious evidence from the current static analysis.';
 
   const relatedDomainCandidates = collectRelatedDomains(parsedEmail);
-  const relatedDomains = await Promise.all(
-    relatedDomainCandidates.map(async ({ domain, relation }) => {
-      const analysis = await analyzeRelatedDomain(domain);
-
-      return {
-        domain,
-        relation,
-        analysis,
-      };
-    }),
-  );
+  const relatedDomains = relatedDomainCandidates.map(({ domain, relation }) => ({
+    domain,
+    relation,
+    analysis: null,
+  }));
 
   return emailAnalysisResponseSchema.parse({
     ...parsedEmail,

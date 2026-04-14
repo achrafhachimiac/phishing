@@ -310,7 +310,7 @@ export const relatedDomainRelationSchema = z.enum(['from', 'return-path', 'url',
 export const relatedDomainSchema = z.object({
   domain: z.string(),
   relation: relatedDomainRelationSchema,
-  analysis: domainAnalysisResponseSchema,
+  analysis: domainAnalysisResponseSchema.nullable().optional(),
 });
 
 export const emailAnalysisResponseSchema = z.object({

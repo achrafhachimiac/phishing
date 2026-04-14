@@ -656,4 +656,142 @@ describe('ThePhish', () => {
     expect(screen.getAllByText((_, element) => element?.textContent?.includes('Size: 1024 bytes') ?? false).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/large.zip/i).length).toBeGreaterThan(0);
   });
+
+  it('runs related domain threat scans manually from THEPHISH without preloading them', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'job_eml_manual_123',
+          status: 'queued',
+          filename: 'manual.eml',
+          emailAnalysis: null,
+          attachmentCount: 0,
+          analyzedAttachmentCount: 0,
+          ignoredAttachments: [],
+          fileAnalysisJobId: null,
+          attachmentResults: [],
+          consolidatedThreatLevel: null,
+          consolidatedRiskScore: null,
+          executiveSummary: null,
+          externalEnrichment: null,
+          error: null,
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'job_eml_manual_123',
+          status: 'completed',
+          filename: 'manual.eml',
+          emailAnalysis: {
+            headers: {
+              from: 'alerts@secure-example.test',
+              to: 'victim@example.org',
+              subject: 'Urgent invoice review',
+              date: 'Tue, 08 Apr 2026 10:00:00 +0000',
+              messageId: '<manual@example.test>',
+              returnPath: 'bounce@secure-example.test',
+            },
+            authentication: {
+              spf: 'fail',
+              dkim: 'pass',
+              dmarc: 'fail',
+            },
+            urls: [],
+            inconsistencies: ['SPF failed for the sending domain.'],
+            threatLevel: 'HIGH',
+            executiveSummary: 'The email contains multiple phishing indicators.',
+            emailAddresses: ['alerts@secure-example.test'],
+            domains: ['secure-example.test', 'evil.example'],
+            ipAddresses: [],
+            attachments: [],
+            relatedDomains: [
+              {
+                domain: 'evil.example',
+                relation: 'url',
+                analysis: null,
+              },
+            ],
+          },
+          attachmentCount: 0,
+          analyzedAttachmentCount: 0,
+          ignoredAttachments: [],
+          fileAnalysisJobId: null,
+          attachmentResults: [],
+          consolidatedThreatLevel: 'HIGH',
+          consolidatedRiskScore: 75,
+          executiveSummary: 'The email contains multiple phishing indicators.',
+          externalEnrichment: null,
+          error: null,
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          domain: 'evil.example',
+          normalizedDomain: 'evil.example',
+          score: 100,
+          riskLevel: 'HIGH',
+          summary: 'Domain matched multiple phishing-related feeds.',
+          dns: { a: [], aaaa: [], mx: [], ns: [], txt: [], caa: [], soa: null },
+          rdap: { registrar: null, createdAt: null, updatedAt: null, expiresAt: null },
+          mailSecurity: {
+            spf: { present: false, record: null, mode: null },
+            dmarc: { present: false, record: null, policy: null },
+            mtaSts: { present: false, record: null },
+            tlsRpt: { present: false, record: null },
+          },
+          infrastructure: { ipAddresses: [], ipIntelligence: [], tls: null },
+          history: { waybackSnapshots: 0, firstSeen: null, lastSeen: null },
+          certificates: { certificateTransparency: { certificateCount: 0, observedSubdomains: [], observedCertificates: [] } },
+          reputation: {
+            alienVault: { status: 'listed', pulseCount: 3, reference: null },
+            virustotal: { status: 'malicious', malicious: 5, suspicious: 1, reference: null },
+            urlscan: { status: 'submitted', resultUrl: null },
+            abuseIpDb: { status: 'clean', confidenceScore: 0, reports: 0, reference: null },
+            urlhausHost: { status: 'listed', reference: null, urls: ['https://evil.example/login'] },
+            cortex: { status: 'suspicious', analyzerCount: 1, matchedAnalyzerCount: 1, summary: 'Cortex flagged domain.' },
+          },
+          riskFactors: ['Suspicious reputation feed correlation'],
+          osint: {
+            virustotal: 'https://example.test/virustotal',
+            urlscan: 'https://example.test/urlscan',
+            viewdns: 'https://example.test/viewdns',
+            crtSh: 'https://example.test/crtsh',
+            wayback: 'https://example.test/wayback',
+            dnsdumpster: 'https://example.test/dnsdumpster',
+            builtwith: 'https://example.test/builtwith',
+            alienVault: 'https://example.test/otx',
+            abuseIpDb: 'https://example.test/abuseipdb',
+            urlhausHost: 'https://example.test/urlhaushost',
+          },
+        }),
+      } as Response);
+
+    render(<ThePhish />);
+
+    const input = screen.getByLabelText(/upload \.eml evidence/i) as HTMLInputElement;
+    const file = new File(['From: alerts@secure-example.test'], 'manual.eml', {
+      type: 'message/rfc822',
+    });
+
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /analyze eml/i }));
+
+    expect(await screen.findByRole('button', { name: /run threat scans/i })).toBeInTheDocument();
+    expect(screen.getByText(/free-tier quota/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /run threat scans/i }));
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenNthCalledWith(3, '/api/analyze/domain', expect.objectContaining({
+        method: 'POST',
+      }));
+    });
+
+    expect(await screen.findByText(/domain matched multiple phishing-related feeds/i)).toBeInTheDocument();
+    expect(screen.getByText(/virustotal malicious/i)).toBeInTheDocument();
+    expect(screen.getByText(/urlhaus listed/i)).toBeInTheDocument();
+  });
 });

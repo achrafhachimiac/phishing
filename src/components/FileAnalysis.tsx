@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Cpu, FileArchive, Upload } from 'lucide-react';
 
 import type { ArchiveTreeNode, ExtractedArchiveTree, FileAnalysisJob, FileIocEnrichment, FileUpload } from '../../shared/analysis-types';
-import { caseFileReference, caseJobReference } from '../case-event-references';
+import { caseFileReference, caseJobReference, caseUrlReference } from '../case-event-references';
 import { useCaseContext } from '../case-context';
 import { formatSignalLabel } from './signal-format';
 import {
@@ -21,6 +21,7 @@ const FILE_ANALYSIS_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 250
 export function FileAnalysis() {
   const { addCaseEvent } = useCaseContext();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [remoteFileUrl, setRemoteFileUrl] = useState('');
   const [analysisJob, setAnalysisJob] = useState<FileAnalysisJob | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState('');
@@ -110,6 +111,66 @@ export function FileAnalysis() {
     throw new Error('File analysis polling timed out.');
   };
 
+  const handleAnalyzeRemoteFile = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!remoteFileUrl.trim()) {
+      return;
+    }
+
+    const normalizedUrl = remoteFileUrl.trim();
+    setIsAnalyzing(true);
+    setError('');
+    setAnalysisJob(null);
+    addCaseEvent({
+      tool: 'files',
+      severity: 'info',
+      title: 'Remote file analysis started',
+      detail: normalizedUrl,
+      references: [caseUrlReference(normalizedUrl, 'remote-file')],
+    });
+
+    try {
+      const createResponse = await fetch('/api/analyze/files/remote', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: normalizedUrl }),
+      });
+      const createdJob = (await createResponse.json()) as FileAnalysisJob | { message?: string };
+
+      if (!createResponse.ok || !('jobId' in createdJob)) {
+        throw new Error(('message' in createdJob && createdJob.message) || 'Remote file analysis launch failed.');
+      }
+
+      setAnalysisJob(createdJob);
+      const completedJob = await pollFileAnalysisJob(createdJob.jobId);
+      setAnalysisJob(completedJob);
+      addCaseEvent({
+        tool: 'files',
+        severity: completedJob.results.some((result) => result.verdict !== 'clean') ? 'warning' : 'success',
+        title: 'Remote file analysis completed',
+        detail: `${normalizedUrl} -> ${completedJob.results.length} result(s)`,
+        references: [
+          caseUrlReference(normalizedUrl, 'remote-file'),
+          caseJobReference('file-analysis', completedJob.jobId),
+        ],
+      });
+    } catch (analysisError) {
+      const message = analysisError instanceof Error ? analysisError.message : 'Remote file analysis failed.';
+      setError(message);
+      addCaseEvent({
+        tool: 'files',
+        severity: 'danger',
+        title: 'Remote file analysis failed',
+        detail: `${normalizedUrl}: ${message}`,
+        references: [caseUrlReference(normalizedUrl, 'remote-file')],
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="cli-border p-4">
@@ -142,6 +203,27 @@ export function FileAnalysis() {
               <span className="animate-pulse flex items-center"><Cpu size={16} className="mr-2 animate-spin" /> ANALYZING FILES...</span>
             ) : (
               <span className="flex items-center"><Upload size={16} className="mr-2" /> ANALYZE FILES</span>
+            )}
+          </button>
+        </form>
+        <div className="my-4 border-t border-cyber-red-dim" />
+        <form onSubmit={handleAnalyzeRemoteFile} className="space-y-4">
+          <label className="block text-sm uppercase tracking-wider">
+            Analyze remote file
+            <input
+              type="url"
+              value={remoteFileUrl}
+              onChange={(event) => setRemoteFileUrl(event.target.value)}
+              placeholder="https://example.test/invoice.docm"
+              className="cli-input w-full mt-3 p-3"
+              aria-label="Analyze remote file"
+            />
+          </label>
+          <button type="submit" disabled={isAnalyzing || !remoteFileUrl.trim()} className="cli-button w-full py-3 flex items-center justify-center">
+            {isAnalyzing ? (
+              <span className="animate-pulse flex items-center"><Cpu size={16} className="mr-2 animate-spin" /> ANALYZING REMOTE FILE...</span>
+            ) : (
+              <span className="flex items-center"><Upload size={16} className="mr-2" /> ANALYZE REMOTE FILE</span>
             )}
           </button>
         </form>

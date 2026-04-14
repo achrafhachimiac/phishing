@@ -13,6 +13,9 @@
   --color-signal-warning: #ff9b2f;
   --color-signal-warning-dim: rgba(255, 155, 47, 0.18);
   --color-signal-warning-glow: rgba(255, 155, 47, 0.55);
+  --color-signal-danger: #ff2f2f;
+  --color-signal-danger-dim: rgba(255, 47, 47, 0.18);
+  --color-signal-danger-glow: rgba(255, 47, 47, 0.72);
   --color-signal-neutral: #f5d08a;
   --color-signal-neutral-dim: rgba(245, 208, 138, 0.16);
 }
@@ -141,6 +144,13 @@ body {
   background: var(--color-signal-neutral-dim);
 }
 
+.signal-badge-danger {
+  color: var(--color-signal-danger);
+  border-color: var(--color-signal-danger);
+  background: linear-gradient(180deg, rgba(255, 47, 47, 0.26), rgba(10, 0, 0, 0.66));
+  box-shadow: 0 0 16px var(--color-signal-danger-glow), inset 0 0 10px rgba(255, 47, 47, 0.15);
+}
+
 .signal-panel {
   border-width: 1px;
   border-style: solid;
@@ -167,6 +177,13 @@ body {
   background: rgba(245, 208, 138, 0.05);
 }
 
+.signal-panel-danger {
+  color: var(--color-signal-danger);
+  border-color: rgba(255, 47, 47, 0.72);
+  background: linear-gradient(180deg, rgba(255, 47, 47, 0.16), rgba(10, 0, 0, 0.56));
+  box-shadow: inset 0 0 26px rgba(255, 47, 47, 0.12), 0 0 18px rgba(255, 47, 47, 0.32);
+}
+
 .signal-text-safe {
   color: var(--color-signal-safe);
 }
@@ -179,12 +196,36 @@ body {
   color: var(--color-signal-neutral);
 }
 
+.signal-text-danger {
+  color: var(--color-signal-danger);
+}
+
 .signal-blink {
   animation: signal-blink 1s steps(2, start) infinite;
 }
 
+.signal-blink-danger {
+  animation: signal-blink-danger 0.7s steps(2, start) infinite;
+}
+
 .signal-blink-soft {
   animation: signal-blink-soft 1.4s ease-in-out infinite;
+}
+
+.signal-blink-danger-soft {
+  animation: signal-blink-danger-soft 0.9s ease-in-out infinite;
+}
+
+.signal-critical-glow {
+  text-shadow: 0 0 8px rgba(255, 47, 47, 0.9), 0 0 16px rgba(255, 47, 47, 0.6);
+}
+
+.signal-progress-word {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  width: var(--signal-progress-ch, 7ch);
+  animation: signal-progress-word 1.8s steps(8, end) infinite;
 }
 
 @keyframes signal-blink {
@@ -206,5 +247,44 @@ body {
   50% {
     opacity: 0.72;
     transform: scale(1.01);
+  }
+}
+
+@keyframes signal-blink-danger {
+  0%, 42% {
+    opacity: 1;
+    filter: brightness(1.05);
+  }
+  43%, 100% {
+    opacity: 0.18;
+    filter: brightness(1.75);
+  }
+}
+
+@keyframes signal-blink-danger-soft {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 18px rgba(255, 47, 47, 0.26);
+  }
+  50% {
+    opacity: 0.68;
+    transform: scale(1.015);
+    box-shadow: 0 0 28px rgba(255, 47, 47, 0.46);
+  }
+}
+
+@keyframes signal-progress-word {
+  0%, 20% {
+    width: 0ch;
+    opacity: 0.4;
+  }
+  45%, 70% {
+    width: var(--signal-progress-ch, 7ch);
+    opacity: 1;
+  }
+  100% {
+    width: 0ch;
+    opacity: 0.35;
   }
 }

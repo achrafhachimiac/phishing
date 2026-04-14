@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AlertOctagon, Cpu, FileWarning, Inbox, Mail, Paperclip, ShieldCheck, Upload } from 'lucide-react';
 
-import type { CortexAnalyzerResult, EmailAuthenticationDetail, EmlAnalysisJob, FileAnalysisJob, FileIocProviderResult, FileStaticAnalysisResult } from '../../shared/analysis-types';
+import type { CortexAnalyzerResult, DomainAnalysisResponse, EmailAuthenticationDetail, EmlAnalysisJob, FileAnalysisJob, FileIocProviderResult, FileStaticAnalysisResult } from '../../shared/analysis-types';
 import { caseFileReference, caseJobReference, caseUrlReference } from '../case-event-references';
 import { useCaseContext } from '../case-context';
 import { SignalBadge, SignalPanel, toneFromFileVerdict, toneFromRiskLevel, toneFromRiskScore, toneFromScannerStatus } from './signal-display';
@@ -9,13 +9,20 @@ import { SignalBadge, SignalPanel, toneFromFileVerdict, toneFromRiskLevel, toneF
 const EML_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const EML_MAX_POLL_ATTEMPTS = 120;
 
-export function ThePhish() {
+export function ThePhish({
+  onRouteToDomainAnalysis,
+  onRouteToBrowserSandbox,
+}: {
+  onRouteToDomainAnalysis?: (domain: string) => void;
+  onRouteToBrowserSandbox?: (url: string) => void;
+}) {
   const { addCaseEvent } = useCaseContext();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [job, setJob] = useState<EmlAnalysisJob | null>(null);
   const [remoteFileJobs, setRemoteFileJobs] = useState<Record<string, FileAnalysisJob>>({});
   const [remoteFileErrors, setRemoteFileErrors] = useState<Record<string, string>>({});
   const [remoteFileLoadingUrl, setRemoteFileLoadingUrl] = useState<string | null>(null);
+  const [relatedDomainScans, setRelatedDomainScans] = useState<Record<string, { status: 'loading' | 'completed' | 'failed'; analysis?: DomainAnalysisResponse; error?: string }>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [error, setError] = useState('');
@@ -46,6 +53,7 @@ export function ThePhish() {
     setRemoteFileJobs({});
     setRemoteFileErrors({});
     setRemoteFileLoadingUrl(null);
+    setRelatedDomainScans({});
     addCaseEvent({
       tool: 'thephish',
       severity: 'info',
@@ -239,6 +247,63 @@ export function ThePhish() {
     throw new Error('Remote file analysis polling timed out.');
   };
 
+  const handleAnalyzeRelatedDomain = async (domain: string) => {
+    setRelatedDomainScans((current) => ({
+      ...current,
+      [domain]: { status: 'loading' },
+    }));
+    addCaseEvent({
+      tool: 'thephish',
+      severity: 'info',
+      title: 'Related domain threat scan started',
+      detail: domain,
+    });
+
+    try {
+      const response = await fetch('/api/analyze/domain', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ domain }),
+      });
+      const payload = (await response.json()) as DomainAnalysisResponse | { message?: string };
+
+      if (!response.ok || !('domain' in payload)) {
+        throw new Error(('message' in payload && payload.message) || 'Related domain threat scan failed.');
+      }
+
+      setRelatedDomainScans((current) => ({
+        ...current,
+        [domain]: {
+          status: 'completed',
+          analysis: payload,
+        },
+      }));
+      addCaseEvent({
+        tool: 'thephish',
+        severity: payload.riskLevel === 'LOW' ? 'success' : 'warning',
+        title: 'Related domain threat scan completed',
+        detail: `${payload.normalizedDomain} scored ${payload.score}/100 (${payload.riskLevel})`,
+      });
+    } catch (scanError) {
+      const message = scanError instanceof Error ? scanError.message : 'Related domain threat scan failed.';
+      setRelatedDomainScans((current) => ({
+        ...current,
+        [domain]: {
+          status: 'failed',
+          error: message,
+        },
+      }));
+      addCaseEvent({
+        tool: 'thephish',
+        severity: 'danger',
+        title: 'Related domain threat scan failed',
+        detail: `${domain}: ${message}`,
+      });
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="cli-border p-4">
@@ -416,12 +481,14 @@ export function ThePhish() {
                   remoteFileErrors={remoteFileErrors}
                   remoteFileLoadingUrl={remoteFileLoadingUrl}
                   onAnalyzeRemoteFile={handleAnalyzeRemoteFile}
+                  onRouteToDomainAnalysis={onRouteToDomainAnalysis}
+                  onRouteToBrowserSandbox={onRouteToBrowserSandbox}
                 />
                 <PanelList title="Email Addresses" values={job.emailAnalysis.emailAddresses} emptyMessage="No email addresses extracted." />
                 <PanelList title="Domains" values={job.emailAnalysis.domains} emptyMessage="No domains extracted." />
                 <PanelList title="IP Addresses" values={job.emailAnalysis.ipAddresses} emptyMessage="No IP addresses extracted." />
                 <PanelList title="Header Inconsistencies" values={job.emailAnalysis.inconsistencies} emptyMessage="No header inconsistencies detected." tone="warning" />
-                <RelatedDomainList domains={job.emailAnalysis.relatedDomains} />
+                <RelatedDomainList domains={job.emailAnalysis.relatedDomains} scans={relatedDomainScans} onAnalyzeDomain={handleAnalyzeRelatedDomain} />
               </div>
             </div>
           ) : null}
@@ -636,12 +703,16 @@ function ParsedUrlList({
   remoteFileErrors,
   remoteFileLoadingUrl,
   onAnalyzeRemoteFile,
+  onRouteToDomainAnalysis,
+  onRouteToBrowserSandbox,
 }: {
   urls: NonNullable<EmlAnalysisJob['emailAnalysis']>['urls'];
   remoteFileJobs: Record<string, FileAnalysisJob>;
   remoteFileErrors: Record<string, string>;
   remoteFileLoadingUrl: string | null;
   onAnalyzeRemoteFile: (url: string) => Promise<void>;
+  onRouteToDomainAnalysis?: (domain: string) => void;
+  onRouteToBrowserSandbox?: (url: string) => void;
 }) {
   return (
     <div>
@@ -652,6 +723,11 @@ function ParsedUrlList({
         <div className="space-y-2">
           {urls.map((url) => (
             <div key={`${url.originalUrl}-${url.decodedUrl}`}>
+              {(() => {
+                const handoffDomain = extractDomainFromUrl(url.decodedUrl);
+                const showHandoffButtons = url.wrapperType === 'barracuda';
+
+                return (
               <SignalPanel tone={url.suspicious ? 'warning' : 'neutral'} className="p-3 text-xs space-y-2">
                 <div className="flex flex-wrap gap-2">
                   <SignalBadge tone={url.suspicious ? 'warning' : 'safe'}>{url.suspicious ? 'suspicious' : 'clean'}</SignalBadge>
@@ -659,6 +735,31 @@ function ParsedUrlList({
                 </div>
                 <div className="break-all">Original: {url.originalUrl}</div>
                 <div className="break-all">Destination: {url.decodedUrl}</div>
+                {showHandoffButtons ? (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={!handoffDomain}
+                      onClick={() => {
+                        if (handoffDomain) {
+                          onRouteToDomainAnalysis?.(handoffDomain);
+                        }
+                      }}
+                      className="cli-button py-2 px-3 text-xs"
+                    >
+                      SEND TO DOMAIN ANALYSIS
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onRouteToBrowserSandbox?.(url.decodedUrl);
+                      }}
+                      className="cli-button py-2 px-3 text-xs"
+                    >
+                      SEND TO URL SANDBOX
+                    </button>
+                  </div>
+                ) : null}
                 {url.resolutionChain && url.resolutionChain.length > 0 ? (
                   <div className="space-y-1 opacity-80">
                     {url.resolutionChain.map((step) => (
@@ -682,6 +783,8 @@ function ParsedUrlList({
                   </div>
                 ) : null}
               </SignalPanel>
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -751,7 +854,23 @@ function looksLikeDownloadableFileUrl(url: string) {
   }
 }
 
-function RelatedDomainList({ domains }: { domains: NonNullable<EmlAnalysisJob['emailAnalysis']>['relatedDomains'] }) {
+function extractDomainFromUrl(url: string) {
+  try {
+    return new URL(url).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function RelatedDomainList({
+  domains,
+  scans,
+  onAnalyzeDomain,
+}: {
+  domains: NonNullable<EmlAnalysisJob['emailAnalysis']>['relatedDomains'];
+  scans: Record<string, { status: 'loading' | 'completed' | 'failed'; analysis?: DomainAnalysisResponse; error?: string }>;
+  onAnalyzeDomain: (domain: string) => Promise<void>;
+}) {
   return (
     <div>
       <div className="uppercase text-xs opacity-70 mb-2">Related Domains</div>
@@ -761,17 +880,57 @@ function RelatedDomainList({ domains }: { domains: NonNullable<EmlAnalysisJob['e
         <div className="space-y-2">
           {domains.map((entry) => (
             <div key={`${entry.domain}-${entry.relation}`}>
-              <SignalPanel tone={toneFromRiskLevel(entry.analysis.riskLevel)} className="p-3 text-xs space-y-2">
+              {(() => {
+                const scanState = scans[entry.domain];
+                const analysis = scanState?.analysis ?? entry.analysis ?? null;
+                const tone = analysis ? toneFromRiskLevel(analysis.riskLevel) : scanState?.status === 'failed' ? 'warning' : 'neutral';
+
+                return (
+              <SignalPanel tone={tone} className="p-3 text-xs space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="font-bold break-all">{entry.domain}</div>
                   <div className="flex flex-wrap gap-2">
                     <SignalBadge tone="neutral">{entry.relation}</SignalBadge>
-                    <SignalBadge tone={toneFromRiskLevel(entry.analysis.riskLevel)}>{entry.analysis.riskLevel}</SignalBadge>
-                    <SignalBadge tone={toneFromRiskScore(entry.analysis.score)}>{entry.analysis.score}</SignalBadge>
+                    {scanState?.status === 'loading' ? <SignalBadge tone="warning" blink>RUNNING</SignalBadge> : null}
+                    {analysis ? <SignalBadge tone={toneFromRiskLevel(analysis.riskLevel)} blink={analysis.riskLevel !== 'LOW'}>{analysis.riskLevel}</SignalBadge> : null}
+                    {analysis ? <SignalBadge tone={toneFromRiskScore(analysis.score)} blink={analysis.score >= 100}>{analysis.score}</SignalBadge> : null}
                   </div>
                 </div>
-                <div className="opacity-85">{entry.analysis.summary}</div>
+                {analysis ? (
+                  <>
+                    <div className="opacity-85">{analysis.summary}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <SignalBadge tone={toneFromScannerStatus(analysis.reputation.urlhausHost.status)}>URLhaus {analysis.reputation.urlhausHost.status}</SignalBadge>
+                      <SignalBadge tone={toneFromScannerStatus(analysis.reputation.alienVault.status)}>OTX {analysis.reputation.alienVault.status}</SignalBadge>
+                      <SignalBadge tone={toneFromScannerStatus(analysis.reputation.virustotal.status)} blink={analysis.reputation.virustotal.status === 'malicious'}>VirusTotal {analysis.reputation.virustotal.status}</SignalBadge>
+                      <SignalBadge tone={toneFromScannerStatus(analysis.reputation.urlscan.status)}>URLScan {analysis.reputation.urlscan.status}</SignalBadge>
+                      <SignalBadge tone={toneFromScannerStatus(analysis.reputation.abuseIpDb.status)}>AbuseIPDB {analysis.reputation.abuseIpDb.status}</SignalBadge>
+                      {analysis.reputation.cortex ? <SignalBadge tone={toneFromScannerStatus(analysis.reputation.cortex.status)}>Cortex {analysis.reputation.cortex.status}</SignalBadge> : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <a href={analysis.osint.virustotal} target="_blank" rel="noreferrer" className="cli-button py-2 px-3 text-[11px]">VirusTotal</a>
+                      <a href={analysis.osint.urlscan} target="_blank" rel="noreferrer" className="cli-button py-2 px-3 text-[11px]">URLScan</a>
+                      <a href={analysis.osint.alienVault} target="_blank" rel="noreferrer" className="cli-button py-2 px-3 text-[11px]">AlienVault OTX</a>
+                      <a href={analysis.osint.urlhausHost} target="_blank" rel="noreferrer" className="cli-button py-2 px-3 text-[11px]">URLhaus Host</a>
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="opacity-80">Threat scans are manual here to avoid burning external free-tier quota on every related domain automatically.</div>
+                    <button
+                      type="button"
+                      onClick={() => void onAnalyzeDomain(entry.domain)}
+                      disabled={scanState?.status === 'loading'}
+                      className="cli-button py-2 px-3 text-xs"
+                    >
+                      {scanState?.status === 'loading' ? 'RUNNING' : 'RUN THREAT SCANS'}
+                    </button>
+                    {scanState?.status === 'failed' && scanState.error ? <div className="text-red-400">{scanState.error}</div> : null}
+                  </div>
+                )}
               </SignalPanel>
+                );
+              })()}
             </div>
           ))}
         </div>

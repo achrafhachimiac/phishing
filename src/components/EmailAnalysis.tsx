@@ -454,12 +454,16 @@ export function EmailAnalysis() {
                         <div className="font-bold break-all">{entry.domain}</div>
                         <div className="opacity-70 uppercase text-xs">Relation: {entry.relation}</div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <SignalBadge tone={toneFromRiskLevel(entry.analysis.riskLevel)} blink={entry.analysis.riskLevel !== 'LOW'}>{entry.analysis.riskLevel}</SignalBadge>
-                        <SignalText tone={entry.analysis.score >= 25 ? 'warning' : 'safe'} blink={entry.analysis.score >= 25}>{entry.analysis.score}</SignalText>
-                      </div>
+                      {entry.analysis ? (
+                        <div className="flex items-center gap-2">
+                          <SignalBadge tone={toneFromRiskLevel(entry.analysis.riskLevel)} blink={entry.analysis.riskLevel !== 'LOW'}>{entry.analysis.riskLevel}</SignalBadge>
+                          <SignalText tone={toneFromRiskScore(entry.analysis.score)} blink={entry.analysis.score >= 25}>{entry.analysis.score}</SignalText>
+                        </div>
+                      ) : (
+                        <SignalBadge tone="neutral">manual scan</SignalBadge>
+                      )}
                     </div>
-                    <p className="mt-2 opacity-90">{entry.analysis.summary}</p>
+                    <p className="mt-2 opacity-90">{entry.analysis?.summary ?? 'Threat scans are now manual per related domain to avoid unnecessary free-tier provider consumption.'}</p>
                   </div>
                 ))}
               </div>

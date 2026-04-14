@@ -13,6 +13,11 @@ import type { CaseEventReference, CaseSession, CaseSessionListResponse, CaseSess
 
 type AppTab = 'domain' | 'email' | 'sandbox' | 'files' | 'thephish';
 
+type TabPrefill = {
+  value: string;
+  nonce: number;
+};
+
 export default function App() {
   const [authState, setAuthState] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking');
   const [activeTab, setActiveTab] = useState<AppTab>('domain');
@@ -28,6 +33,8 @@ export default function App() {
   const [caseLibrarySort, setCaseLibrarySort] = useState<'updated-desc' | 'updated-asc' | 'events-desc'>('updated-desc');
   const [casePendingDeletion, setCasePendingDeletion] = useState<string | null>(null);
   const [isDeletingCase, setIsDeletingCase] = useState<string | null>(null);
+  const [domainPrefill, setDomainPrefill] = useState<TabPrefill | null>(null);
+  const [sandboxPrefill, setSandboxPrefill] = useState<TabPrefill | null>(null);
   const lastPersistedCaseSnapshotRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -139,6 +146,18 @@ export default function App() {
     setCaseStartedAt(new Date().toISOString());
     setVisitedTabs([activeTab]);
     setCaseEvents([]);
+    setDomainPrefill(null);
+    setSandboxPrefill(null);
+  };
+
+  const handleRouteToDomainAnalysis = (domain: string) => {
+    setDomainPrefill({ value: domain, nonce: Date.now() });
+    handleSelectTab('domain');
+  };
+
+  const handleRouteToBrowserSandbox = (url: string) => {
+    setSandboxPrefill({ value: url, nonce: Date.now() });
+    handleSelectTab('sandbox');
   };
 
   const handleActivateCase = async (caseId: string) => {
@@ -526,19 +545,19 @@ export default function App() {
         <main className="animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div key={caseRevision} className="space-y-6">
             <div className={activeTab === 'domain' ? 'block' : 'hidden'} aria-hidden={activeTab !== 'domain'}>
-              <DomainAnalysis />
+              <DomainAnalysis prefilledDomain={domainPrefill?.value} prefillNonce={domainPrefill?.nonce} />
             </div>
             <div className={activeTab === 'email' ? 'block' : 'hidden'} aria-hidden={activeTab !== 'email'}>
               <EmailAnalysis />
             </div>
             <div className={activeTab === 'sandbox' ? 'block' : 'hidden'} aria-hidden={activeTab !== 'sandbox'}>
-              <BrowserSandbox />
+              <BrowserSandbox prefilledUrl={sandboxPrefill?.value} prefillNonce={sandboxPrefill?.nonce} />
             </div>
             <div className={activeTab === 'files' ? 'block' : 'hidden'} aria-hidden={activeTab !== 'files'}>
               <FileAnalysis />
             </div>
             <div className={activeTab === 'thephish' ? 'block' : 'hidden'} aria-hidden={activeTab !== 'thephish'}>
-              <ThePhish />
+              <ThePhish onRouteToDomainAnalysis={handleRouteToDomainAnalysis} onRouteToBrowserSandbox={handleRouteToBrowserSandbox} />
             </div>
           </div>
         </main>

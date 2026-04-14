@@ -260,6 +260,112 @@ describe('FileAnalysis', () => {
     expect(screen.getByText(/app.alert\("phish"\)/i)).toBeInTheDocument();
   });
 
+  it('queues a remote file URL and renders the resulting analysis job', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'remote_job_123',
+          status: 'queued',
+          queuedFiles: ['invoice.docm'],
+          results: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'remote_job_123',
+          status: 'completed',
+          queuedFiles: ['invoice.docm'],
+          results: [
+            {
+              filename: 'invoice.docm',
+              contentType: 'application/vnd.ms-word.document.macroEnabled.12',
+              detectedType: 'office',
+              extension: 'docm',
+              size: 256,
+              sha256: 'def456',
+              extractedUrls: [],
+              indicators: [
+                {
+                  kind: 'macro_stream',
+                  severity: 'high',
+                  value: 'Macro stream detected',
+                },
+              ],
+              riskScoreBreakdown: {
+                totalScore: 75,
+                thresholds: {
+                  suspicious: 25,
+                  malicious: 70,
+                },
+                factors: [
+                  {
+                    label: 'Macro stream',
+                    severity: 'high',
+                    contribution: 75,
+                    evidence: 'Macro stream detected',
+                  },
+                ],
+              },
+              riskScore: 75,
+              iocEnrichment: {
+                status: 'pending',
+                extractedUrls: [],
+                extractedDomains: [],
+                results: [],
+                summary: 'IOC enrichment queued for extracted URLs and derived domains.',
+                updatedAt: null,
+              },
+              verdict: 'malicious',
+              summary: 'Static analysis found macro-enabled Office content.',
+              storagePath: 'storage/downloads/remote_job_123/invoice.docm',
+              externalScans: {
+                virustotal: {
+                  status: 'pending',
+                  malicious: null,
+                  suspicious: null,
+                  reference: null,
+                },
+                clamav: {
+                  status: 'not_configured',
+                  signature: null,
+                  engine: null,
+                  detail: null,
+                },
+                yara: {
+                  status: 'not_configured',
+                  rules: [],
+                  detail: null,
+                },
+              },
+              parserReports: [],
+              artifacts: [],
+            },
+          ],
+        }),
+      } as Response);
+
+    render(<FileAnalysis />);
+
+    fireEvent.change(screen.getByLabelText(/analyze remote file/i), {
+      target: { value: 'https://example.test/invoice.docm' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^analyze remote file$/i }));
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenNthCalledWith(1, '/api/analyze/files/remote', expect.objectContaining({
+        method: 'POST',
+      }));
+      expect(globalThis.fetch).toHaveBeenNthCalledWith(2, '/api/analyze/files/remote_job_123', expect.anything());
+    });
+
+    expect(await screen.findByText(/completed \[remote_job_123\]/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/invoice.docm/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/macro stream detected/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/malicious/i).length).toBeGreaterThan(0);
+  });
+
   it('renders archive tree details when the parser report includes extracted tree metadata', async () => {
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce({

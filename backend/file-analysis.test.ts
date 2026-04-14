@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { path7za } from '7zip-bin';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
 import * as tar from 'tar';
 
@@ -79,6 +79,71 @@ describe('createFileAnalysisJob', () => {
       ]),
     );
   }, 10000);
+
+  it('does not amplify inline base64 image metadata into a malicious IOC verdict', async () => {
+    const pngWithMetadataUrl = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('https://evil.example/tracker', 'utf8'),
+    ]);
+    const enrichExtractedIocs: NonNullable<Parameters<typeof createFileAnalysisJob>[4]> = vi.fn(async () => ({
+      enrichment: {
+        status: 'completed' as const,
+        extractedUrls: ['https://evil.example/tracker'],
+        extractedDomains: ['evil.example'],
+        results: [
+          {
+            type: 'url' as const,
+            value: 'https://evil.example/tracker',
+            derivedFrom: null,
+            verdict: 'malicious' as const,
+            summary: 'https://evil.example/tracker flagged by URLhaus.',
+            providerResults: [
+              {
+                provider: 'urlhaus' as const,
+                status: 'listed' as const,
+                detail: 'phishing',
+                reference: 'https://urlhaus.example/report',
+              },
+            ],
+          },
+        ],
+        summary: '1 malicious IOC found.',
+        updatedAt: '2026-04-12T12:00:00.000Z',
+      },
+      indicators: [
+        {
+          kind: 'ioc_malicious_url' as const,
+          severity: 'high' as const,
+          value: 'https://evil.example/tracker flagged by URLhaus.',
+        },
+      ],
+    }));
+
+    const job = await createFileAnalysisJob(
+      [
+        {
+          filename: 'attachment-1.bin',
+          contentBase64: pngWithMetadataUrl.toString('base64'),
+          contentType: 'image/png',
+        },
+      ],
+      undefined,
+      async () => ({
+        status: 'clean',
+        malicious: 0,
+        suspicious: 0,
+        reference: null,
+      }),
+      () => 'job_inline_png',
+      enrichExtractedIocs,
+    );
+
+    expect(enrichExtractedIocs).not.toHaveBeenCalled();
+    expect(job.results[0].detectedType).toBe('image');
+    expect(job.results[0].riskScore).toBe(20);
+    expect(job.results[0].verdict).toBe('clean');
+    expect(job.results[0].iocEnrichment.summary).toMatch(/inline image metadata/i);
+  });
 
   it('adds Cortex hash reputation to the file result when configured', async () => {
     const suspiciousPdf = Buffer.from('%PDF-1.7\n1 0 obj\n/JavaScript https://evil.example/login\n/OpenAction\n');

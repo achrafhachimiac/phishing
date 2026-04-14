@@ -26,6 +26,55 @@ describe('App navigation', () => {
     expect(await screen.findByText(/thephish eml intake/i)).toBeInTheDocument();
   });
 
+  it('routes Barracuda decoded targets from THEPHISH to domain analysis and browser sandbox', async () => {
+    mockAppFetch({
+      '/api/analyze/eml': async () => ({
+        ok: true,
+        json: async () => ({
+          jobId: 'job_eml_456',
+          status: 'queued',
+          filename: 'barracuda.eml',
+          emailAnalysis: null,
+          attachmentCount: 0,
+          analyzedAttachmentCount: 0,
+          ignoredAttachments: [],
+          fileAnalysisJobId: null,
+          attachmentResults: [],
+          consolidatedThreatLevel: null,
+          consolidatedRiskScore: null,
+          executiveSummary: null,
+          externalEnrichment: null,
+          error: null,
+        }),
+      } as Response),
+      '/api/analyze/eml/job_eml_456': async () => ({
+        ok: true,
+        json: async () => buildMockThePhishBarracudaJob(),
+      } as Response),
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /\[5\] thephish/i }));
+
+    const uploadInput = screen.getByLabelText(/upload \.eml evidence/i) as HTMLInputElement;
+    const file = new File(['From: alerts@secure-example.test'], 'barracuda.eml', { type: 'message/rfc822' });
+
+    fireEvent.change(uploadInput, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /analyze eml/i }));
+
+    expect(await screen.findByRole('button', { name: /send to domain analysis/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /send to domain analysis/i }));
+
+    expect(screen.getByDisplayValue('evil.example')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /\[5\] thephish/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /send to url sandbox/i }));
+
+    expect(screen.getByDisplayValue('https://evil.example/login')).toBeInTheDocument();
+  });
+
   it('keeps analysis state across tab switches and clears it when the case is reset', async () => {
     mockAppFetch();
 
@@ -387,4 +436,60 @@ function buildMockEmailAnalysisResponse() {
       relatedDomains: [],
     }),
   } as Response;
+}
+
+function buildMockThePhishBarracudaJob() {
+  return {
+    jobId: 'job_eml_456',
+    status: 'completed',
+    filename: 'barracuda.eml',
+    emailAnalysis: {
+      headers: {
+        from: 'alerts@secure-example.test',
+        to: 'victim@example.org',
+        subject: 'Urgent login validation',
+        date: 'Tue, 08 Apr 2026 10:00:00 +0000',
+        messageId: '<barracuda@example.test>',
+        returnPath: 'bounce@secure-example.test',
+      },
+      authentication: {
+        spf: 'pass',
+        dkim: 'pass',
+        dmarc: 'pass',
+      },
+      urls: [
+        {
+          originalUrl: 'https://linkprotect.barracuda.com/redirect?url=https%3A%2F%2Fevil.example%2Flogin',
+          decodedUrl: 'https://evil.example/login',
+          wrapperType: 'barracuda',
+          resolutionChain: [
+            {
+              label: 'decoded',
+              url: 'https://evil.example/login',
+            },
+          ],
+          suspicious: true,
+          reason: 'Barracuda wrapper resolved to a suspicious credential landing page.',
+        },
+      ],
+      inconsistencies: [],
+      threatLevel: 'HIGH',
+      executiveSummary: 'Barracuda-protected URL resolves to an external login lure.',
+      emailAddresses: ['alerts@secure-example.test'],
+      domains: ['secure-example.test', 'evil.example'],
+      ipAddresses: [],
+      attachments: [],
+      relatedDomains: [],
+    },
+    attachmentCount: 0,
+    analyzedAttachmentCount: 0,
+    ignoredAttachments: [],
+    fileAnalysisJobId: null,
+    attachmentResults: [],
+    consolidatedThreatLevel: 'HIGH',
+    consolidatedRiskScore: 76,
+    executiveSummary: 'Barracuda-protected URL resolves to an external login lure.',
+    externalEnrichment: null,
+    error: null,
+  };
 }

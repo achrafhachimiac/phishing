@@ -14,7 +14,13 @@ const LIVE_ACTIVITY_REFRESH_INTERVAL_MS = 3000;
 const LIVE_SESSION_IDLE_TIMEOUT_MINUTES = 5;
 const OBSERVED_VALUE_MAX_LENGTH = 100;
 
-export function BrowserSandbox() {
+export function BrowserSandbox({
+  prefilledUrl,
+  prefillNonce,
+}: {
+  prefilledUrl?: string;
+  prefillNonce?: number;
+}) {
   const { addCaseEvent } = useCaseContext();
   const [targetUrl, setTargetUrl] = useState('');
   const [sandboxJob, setSandboxJob] = useState<BrowserSandboxJob | null>(null);
@@ -26,6 +32,15 @@ export function BrowserSandbox() {
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const liveBrowserContainerRef = useRef<HTMLDivElement | null>(null);
   const reportedDownloadAnalysisJobsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!prefilledUrl) {
+      return;
+    }
+
+    setTargetUrl(prefilledUrl);
+    setError('');
+  }, [prefilledUrl, prefillNonce]);
 
   const liveAccess = sandboxJob?.result?.access ?? null;
   const liveAccessUrl = liveAccess?.url ?? null;

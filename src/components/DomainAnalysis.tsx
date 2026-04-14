@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Globe, Search, ExternalLink, Activity, Server, AlertTriangle } from 'lucide-react';
 
 import type { DomainAnalysisResponse } from '../../shared/analysis-types';
@@ -6,12 +6,27 @@ import { caseDomainReference } from '../case-event-references';
 import { useCaseContext } from '../case-context';
 import { SignalBadge, SignalPanel, SignalText, isBlinkingSignal, toneFromRiskLevel, toneFromRiskScore, toneFromScannerStatus } from './signal-display';
 
-export function DomainAnalysis() {
+export function DomainAnalysis({
+  prefilledDomain,
+  prefillNonce,
+}: {
+  prefilledDomain?: string;
+  prefillNonce?: number;
+}) {
   const { addCaseEvent } = useCaseContext();
   const [domain, setDomain] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<DomainAnalysisResponse | null>(null);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!prefilledDomain) {
+      return;
+    }
+
+    setDomain(prefilledDomain);
+    setError('');
+  }, [prefilledDomain, prefillNonce]);
 
   const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();

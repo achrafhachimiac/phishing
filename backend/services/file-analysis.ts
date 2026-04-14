@@ -132,7 +132,7 @@ export async function analyzeUploadedFileStatically(
 
   const sha256 = createHash('sha256').update(buffer).digest('hex');
   const extension = extractExtension(file.filename);
-  const detectedType = detectFileType(buffer, extension, file.filename);
+  const detectedType = detectFileType(buffer, extension, file.filename, file.contentType ?? null);
   const extractedUrls = extractUrls(buffer);
   const indicators: FileIndicator[] = [];
   const parserReports = await buildParserReports({
@@ -342,17 +342,23 @@ async function completeFileAnalysisResult(
   enrichExtractedIocs: EnrichExtractedIocs,
   enrichFileWithCortex: EnrichFileWithCortex,
 ): Promise<FileStaticAnalysisResult> {
+  const shouldSkipInlineImageIocEnrichment = isLikelyInlineImageMetadataOnly(analysis);
   const [virustotal, cortex, iocCompletion] = await Promise.all([
     enrichFileWithThreatIntel(analysis.sha256).catch(() => emptyVirusTotalScan()),
     enrichFileWithCortex(analysis.filename, analysis.sha256).catch(() => emptyCortexScan('unavailable')),
-    enrichExtractedIocs(analysis.extractedUrls)
-      .catch((error) => ({
-        enrichment: buildUnavailableIocEnrichment(
-          analysis.extractedUrls,
-          error instanceof Error ? error.message : 'IOC enrichment failed unexpectedly.',
-        ),
-        indicators: [] as FileIndicator[],
-      })),
+    shouldSkipInlineImageIocEnrichment
+      ? Promise.resolve({
+          enrichment: buildInlineImageMetadataIocEnrichment(analysis.extractedUrls),
+          indicators: [] as FileIndicator[],
+        })
+      : enrichExtractedIocs(analysis.extractedUrls)
+          .catch((error) => ({
+            enrichment: buildUnavailableIocEnrichment(
+              analysis.extractedUrls,
+              error instanceof Error ? error.message : 'IOC enrichment failed unexpectedly.',
+            ),
+            indicators: [] as FileIndicator[],
+          })),
   ]);
   const indicators = deduplicateIndicators([...analysis.indicators, ...buildIndicatorsFromCortexScan(cortex), ...iocCompletion.indicators]);
   const riskScore = Math.min(
@@ -918,6 +924,25 @@ function buildRiskScoreBreakdown(indicators: FileIndicator[], totalScore: number
       }))
       .sort((left, right) => right.contribution - left.contribution || left.label.localeCompare(right.label)),
   };
+}
+
+function buildInlineImageMetadataIocEnrichment(extractedUrls: string[]): FileIocEnrichment {
+  return {
+    status: 'completed',
+    extractedUrls,
+    extractedDomains: [],
+    results: [],
+    summary: 'IOC enrichment skipped because the extracted URLs appear to come from inline image metadata embedded in the email body.',
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function isLikelyInlineImageMetadataOnly(analysis: FileStaticAnalysisResult) {
+  const isImage = analysis.detectedType === 'image' || analysis.contentType?.toLowerCase().startsWith('image/');
+  const looksLikeInlineEmailPart = /^attachment-\d+\.(bin|png|jpg|jpeg|gif|webp)$/i.test(analysis.filename);
+  const onlyMetadataLikeIndicators = analysis.indicators.length > 0 && analysis.indicators.every((indicator) => indicator.kind === 'embedded_url');
+
+  return isImage && looksLikeInlineEmailPart && onlyMetadataLikeIndicators;
 }
 
 function emptyRiskScoreBreakdown(): FileRiskScoreBreakdown {
@@ -1554,11 +1579,24 @@ function hasDoubleExtension(filename: string) {
   return parts.length >= 3;
 }
 
-function detectFileType(buffer: Buffer, extension: string | null, filename = '') {
+function detectFileType(buffer: Buffer, extension: string | null, filename = '', contentType: string | null = null) {
   const normalizedFilename = filename.toLowerCase();
+  const normalizedContentType = contentType?.toLowerCase() ?? null;
   const header = buffer.subarray(0, 8).toString('latin1');
   if (header.startsWith('%PDF')) {
     return 'pdf';
+  }
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return 'image';
+  }
+  if (buffer.subarray(0, 3).toString('ascii') === 'GIF') {
+    return 'image';
+  }
+  if (buffer.subarray(0, 2).toString('hex') === 'ffd8') {
+    return 'image';
+  }
+  if (header.startsWith('RIFF') && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return 'image';
   }
   if (buffer.subarray(0, 2).toString('ascii') === 'MZ') {
     return 'pe';
@@ -1580,6 +1618,9 @@ function detectFileType(buffer: Buffer, extension: string | null, filename = '')
   }
   if (extension && ['js', 'vbs', 'ps1', 'bat', 'cmd'].includes(extension)) {
     return 'script';
+  }
+  if (normalizedContentType?.startsWith('image/') || (extension && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(extension))) {
+    return 'image';
   }
   return extension ?? 'unknown';
 }

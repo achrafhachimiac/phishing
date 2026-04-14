@@ -1,106 +1,90 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Fred The Phisher
 
-# Run and deploy your AI Studio app
+Fred The Phisher is a phishing investigation workbench for analysts. It combines domain reputation, raw email parsing, EML intake, file detonation prep, browser sandboxing, related-domain triage, and CASE-style evidence tracking in one interface.
 
-This contains everything you need to run your app locally.
+## Main features
 
-View your app in AI Studio: https://ai.studio/apps/87485238-a188-4a21-b9e7-8d703c9b9f9d
+- Domain Analysis with DNS, RDAP, TLS, mail-security, reputation feeds, and OSINT links.
+- Full Email Analysis for raw RFC822 content with authentication checks, extracted URLs, inconsistencies, and related-domain inventory.
+- THEPHISH EML Intake workflow with attachment analysis, Barracuda URL decoding, remote file launch, and manual per-domain threat scans.
+- URL Sandbox with live browser evidence, screenshots, downloads, traces, and session activity.
+- Static File Analysis for uploaded files and remote files.
+- File scoring with parser reports for PDF, archives, Office containers, scripts, YARA, ClamAV, Cortex, and IOC enrichment.
+- CASE journal with saved sessions, export to text or JSON, reopen, delete, and analyst event references.
+- Storage-backed evidence links for uploads, downloads, screenshots, traces, and generated reports.
 
-## Run Locally
+## Local setup
 
-**Prerequisites:**  Node.js
+Prerequisites: Node.js 20+ and npm.
 
+1. Install dependencies.
 
-1. Install dependencies:
-   `npm install`
-2. Set the environment variables you actually want to use in `.env.local`.
-   `GEMINI_API_KEY` is optional for the current backend-driven analysis flow.
-   Threat-intelligence free tiers are optional too: `VIRUSTOTAL_API_KEY`, `URLSCAN_API_KEY`, `ABUSEIPDB_API_KEY`, `URLHAUS_AUTH_KEY`.
-   Local static-file scanners are optional too: `FILE_ANALYSIS_YARA_COMMAND`, `FILE_ANALYSIS_CLAMAV_COMMAND`.
-   Browser sandbox provider settings are optional and let the UI expose a live Chromium session when you have Xvfb/noVNC or a similar gateway available: `BROWSER_SANDBOX_PROVIDER`, `BROWSER_SANDBOX_ACCESS_MODE`, `BROWSER_SANDBOX_ACCESS_BASE_URL`, `BROWSER_SANDBOX_ACCESS_URL_TEMPLATE`, `BROWSER_SANDBOX_ACCESS_PATH_TEMPLATE`, `BROWSER_SANDBOX_START_COMMAND`, `BROWSER_SANDBOX_STOP_COMMAND`.
-   Do not commit real API keys into the repository.
-3. Start or restart the backend after editing `.env.local`, otherwise new keys will not be visible to the API process.
-4. Run the app:
-   `npm run dev`
-
-### Environment templates
-
-- `.env.example`: base local template for development.
-- `.env.production.example`: production-ready template for the self-hosted browser sandbox path.
-- Real secrets stay only in `.env.local` locally and in `APP_ENV_FILE` on GitHub Actions.
-
-### Browser sandbox provider notes
-
-- Default behavior: the backend runs a real Chromium/Playwright evidence collection flow server-side, but returns no live access URL.
-- To expose a live browser session through the same domain with noVNC, set for example:
-   - `BROWSER_SANDBOX_PROVIDER=local-novnc`
-   - `BROWSER_SANDBOX_ACCESS_MODE=embedded`
-   - `BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote`
-   - `BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :cdpPort :sessionDir`
-   - `BROWSER_SANDBOX_STOP_COMMAND=bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId :sessionDir`
-- With that configuration, the app returns a clickable `access.url`, can render an embedded iframe analyst console, and can start a local Xvfb + Chromium + x11vnc + noVNC stack on the same Linux host.
-- The runtime allocates deterministic ports and session directories from each `jobId`, so the backend and the shell scripts resolve the same display, VNC port, and noVNC port without an external provider.
-- Nginx must proxy `/novnc/<port>/...` to `127.0.0.1:<port>` with websocket upgrade headers, otherwise the iframe link will exist but the live browser will not load.
-- To install the local runtime during deployment, set `ENABLE_LOCAL_BROWSER_SANDBOX=1` for the deploy script. This installs `xvfb`, `x11vnc`, `novnc`, `websockify`, and the Playwright Chromium binary on the server.
-
-### Static file analysis notes
-
-- The backend now combines binary heuristics with specialized parsers for PDF, PE, script, and Office/ZIP containers.
-- YARA and ClamAV are optional command-line integrations. They are not bundled into the Node app; you expose them through env templates:
-   - `FILE_ANALYSIS_YARA_COMMAND=yara -r /opt/yara/rules/index.yar :path`
-   - `FILE_ANALYSIS_CLAMAV_COMMAND=clamscan --no-summary :path`
-- Supported placeholders in those commands are `:path`, `:filename`, and `:sha256`.
-- If those variables are unset, the UI and API will report the scanners as `not_configured` instead of failing the whole analysis.
-- Uploaded samples, sandbox screenshots, traces, and downloads are now exposed through `/storage/...`, so the UI can render clickable links and image previews for available artifacts.
-
-## CI/CD deployment
-
-The repository includes a GitHub Actions workflow that:
-
-1. installs dependencies
-2. runs tests and type checks
-3. builds the client and backend bundles
-4. deploys the built release to a Linux server over SSH when `main` is updated
-
-The deployment job bootstraps Node.js on the target host if needed, installs production dependencies, writes a `systemd` service, and restarts the app.
-
-### GitHub repository variables
-
-- `SSH_HOST`: target server hostname or IP, for example `109.199.125.137`
-- `SSH_USER`: SSH user used by GitHub Actions, for example `root`
-- `SSH_PORT`: optional, defaults to `22`
-- `APP_DIR`: optional deploy directory, for example `/opt/phishing`
-- `SYSTEMD_SERVICE`: optional service name, for example `phishing`
-- `APP_NAME`: optional logical application name, for example `phishing`
-- `APP_PORT`: optional backend port, defaults to `4000`
-
-### GitHub repository secrets
-
-- `SSH_PRIVATE_KEY`: private key used by GitHub Actions to connect to the server
-- `APP_ENV_FILE`: optional full contents of the production `.env` file. This is the CI/CD source of truth for deployed environment values when provided.
-
-Important: if you make a temporary production env hotfix during incident response, update `APP_ENV_FILE` before the next deployment or CI will reapply the old values. The workflow now auto-normalizes the legacy local noVNC start/stop commands to the current `:cdpPort` and `:sessionDir` format, and still fails the deployment if `BROWSER_SANDBOX_PROVIDER=local-novnc` is missing required placeholders such as `:cdpPort`, `:novncPort`, or `:sessionDir`.
-
-Recommended `APP_ENV_FILE` starting point for the current self-hosted setup:
-
-```env
-PORT=4000
-VIRUSTOTAL_API_KEY=
-URLSCAN_API_KEY=
-ABUSEIPDB_API_KEY=
-URLHAUS_AUTH_KEY=
-FILE_ANALYSIS_YARA_COMMAND=yara -r /opt/yara/rules/index.yar :path
-FILE_ANALYSIS_CLAMAV_COMMAND=clamscan --no-summary :path
-BROWSER_SANDBOX_PROVIDER=local-novnc
-BROWSER_SANDBOX_ACCESS_MODE=embedded
-BROWSER_SANDBOX_ACCESS_URL_TEMPLATE=https://fred.syntrix.ae/novnc/:novncPort/vnc.html?autoconnect=1&resize=remote
-BROWSER_SANDBOX_ACCESS_PATH_TEMPLATE=:jobId
-BROWSER_SANDBOX_START_COMMAND=bash scripts/sandbox/start-local-browser-sandbox.sh :jobId :url :displayNumber :vncPort :novncPort :cdpPort :sessionDir
-BROWSER_SANDBOX_STOP_COMMAND=bash scripts/sandbox/stop-local-browser-sandbox.sh :jobId :sessionDir
+```bash
+npm install
 ```
 
-If you want evidence collection only without live noVNC access, set `BROWSER_SANDBOX_ACCESS_MODE=none` and leave the start/stop commands empty.
+2. Create `.env.local` from the available examples and set only the integrations you need.
 
-Important: the SSH key already installed on your workstation is not available to GitHub Actions. Create a dedicated deploy keypair for CI, add the public key to `~/.ssh/authorized_keys` on the server, and store the private key in `SSH_PRIVATE_KEY`.
+Common optional keys:
+
+- `VIRUSTOTAL_API_KEY`
+- `URLSCAN_API_KEY`
+- `ABUSEIPDB_API_KEY`
+- `URLHAUS_AUTH_KEY`
+- `FILE_ANALYSIS_YARA_COMMAND`
+- `FILE_ANALYSIS_CLAMAV_COMMAND`
+- `BROWSER_SANDBOX_PROVIDER`
+- `BROWSER_SANDBOX_ACCESS_MODE`
+- `BROWSER_SANDBOX_ACCESS_URL_TEMPLATE`
+- `BROWSER_SANDBOX_START_COMMAND`
+- `BROWSER_SANDBOX_STOP_COMMAND`
+
+3. Start the development stack.
+
+```bash
+npm run dev
+```
+
+4. Open the local URL shown by Vite.
+
+## Useful commands
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+## Browser sandbox notes
+
+- The application supports server-side browser execution and optional live analyst access.
+- For self-hosted noVNC access, configure the browser sandbox environment variables and proxy `/novnc/<port>/...` through Nginx.
+- The project already contains deployment helpers in `scripts/sandbox/` and `scripts/deploy/`.
+
+## Deployment
+
+The repository is designed to deploy through CI/CD.
+
+- Pushes to `main` run lint, tests, and build.
+- Production deployment is done over SSH.
+- Production environment values should live in GitHub secrets, especially `APP_ENV_FILE` and `SSH_PRIVATE_KEY`.
+- If you apply a temporary production hotfix, backport it to the repository and CI/CD source of truth before the next deployment.
+
+## Project structure
+
+- `src/`: React frontend.
+- `backend/`: Express API and analysis services.
+- `shared/`: shared Zod schemas and types.
+- `scripts/`: deployment and sandbox helper scripts.
+- `storage/`: local evidence storage.
+
+## Current investigation workflows
+
+- Send Barracuda-decoded targets from THEPHISH directly to Domain Analysis or URL Sandbox.
+- Manually trigger related-domain threat scans inside THEPHISH to preserve free-tier API quotas.
+- Launch remote file analysis from parsed URLs or directly from Static File Analysis.
+- Review critical scores and states with stronger visual alerts for `CRITICAL`, `100`, `RUNNING`, and `parsing`.
+
+## Security note
+
+This tool is meant for authorized investigations only. Do not commit real secrets, production credentials, or private samples into the repository.
