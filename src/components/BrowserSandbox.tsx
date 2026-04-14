@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertOctagon, Cpu, ExternalLink, Globe, MonitorSmartphone } from 'lucide-react';
 
-import type { BrowserSandboxJob } from '../../shared/analysis-types';
+import type { BrowserSandboxJob, BrowserSandboxJournalEntry, FileAnalysisJob } from '../../shared/analysis-types';
+import { caseFileReference, caseJobReference, caseSessionReference, caseUrlReference } from '../case-event-references';
+import { useCaseContext } from '../case-context';
 import { isPreviewableImage, toStorageUrl } from './storage-assets';
-import { SignalBadge, SignalPanel, SignalText, toneFromScannerStatus } from './signal-display';
+import { SignalBadge, SignalPanel, SignalText, toneFromFileVerdict, toneFromRiskScore, toneFromScannerStatus } from './signal-display';
 
 const SANDBOX_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const SANDBOX_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 250 : 120000;
@@ -13,14 +15,17 @@ const LIVE_SESSION_IDLE_TIMEOUT_MINUTES = 5;
 const OBSERVED_VALUE_MAX_LENGTH = 100;
 
 export function BrowserSandbox() {
+  const { addCaseEvent } = useCaseContext();
   const [targetUrl, setTargetUrl] = useState('');
   const [sandboxJob, setSandboxJob] = useState<BrowserSandboxJob | null>(null);
   const [isLaunching, setIsLaunching] = useState(false);
   const [error, setError] = useState('');
+  const [downloadAnalysisJobs, setDownloadAnalysisJobs] = useState<Record<string, FileAnalysisJob>>({});
   const [iframeHeight, setIframeHeight] = useState(720);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
   const liveBrowserContainerRef = useRef<HTMLDivElement | null>(null);
+  const reportedDownloadAnalysisJobsRef = useRef<Set<string>>(new Set());
 
   const liveAccess = sandboxJob?.result?.access ?? null;
   const liveAccessUrl = liveAccess?.url ?? null;
@@ -110,6 +115,63 @@ export function BrowserSandbox() {
     };
   }, [sandboxJob?.jobId, sandboxJob?.result?.session.status]);
 
+  useEffect(() => {
+    const analysisJobIds = (sandboxJob?.result?.downloads ?? [])
+      .map((download) => download.fileAnalysisJobId)
+      .filter((value): value is string => Boolean(value));
+
+    if (!analysisJobIds.length) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const refreshAnalysisJobs = async () => {
+      for (const analysisJobId of analysisJobIds) {
+        try {
+          const response = await fetch(`/api/analyze/files/${analysisJobId}`, {
+            method: 'GET',
+          });
+          const payload = (await response.json()) as FileAnalysisJob | { message?: string };
+          if (!response.ok || !('jobId' in payload) || cancelled) {
+            continue;
+          }
+
+          setDownloadAnalysisJobs((current) => ({ ...current, [analysisJobId]: payload }));
+          if (
+            (payload.status === 'completed' || payload.status === 'failed') &&
+            !reportedDownloadAnalysisJobsRef.current.has(analysisJobId)
+          ) {
+            reportedDownloadAnalysisJobsRef.current.add(analysisJobId);
+            const matchingDownload = sandboxJob?.result?.downloads.find((download) => download.fileAnalysisJobId === analysisJobId);
+            addCaseEvent({
+              tool: 'sandbox',
+              severity: payload.status === 'completed' ? (payload.results.some((result) => result.verdict !== 'clean') ? 'warning' : 'success') : 'danger',
+              title: 'Sandbox download analysis finished',
+              detail: `${payload.queuedFiles.join(', ') || analysisJobId} -> ${payload.status}`,
+              references: [
+                caseJobReference('file-analysis', analysisJobId),
+                ...(matchingDownload ? [caseFileReference(matchingDownload.filename, matchingDownload.path, matchingDownload.url, 'sandbox-download')] : []),
+              ],
+            });
+          }
+        } catch {
+          continue;
+        }
+      }
+    };
+
+    void refreshAnalysisJobs();
+    const timer = window.setInterval(() => {
+      void refreshAnalysisJobs();
+    }, SANDBOX_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [addCaseEvent, sandboxJob?.result?.downloads]);
+
   const handleCopyObservedValue = async (value: string) => {
     try {
       if (navigator.clipboard?.writeText) {
@@ -144,6 +206,13 @@ export function BrowserSandbox() {
     setIsLaunching(true);
     setError('');
     setSandboxJob(null);
+    addCaseEvent({
+      tool: 'sandbox',
+      severity: 'info',
+      title: 'Browser sandbox launched',
+      detail: targetUrl,
+      references: [caseUrlReference(targetUrl, 'sandbox-target')],
+    });
 
     try {
       const createResponse = await fetch('/api/sandbox/browser', {
@@ -162,8 +231,28 @@ export function BrowserSandbox() {
       setSandboxJob(createdJob);
       const completedJob = await pollSandboxJob(createdJob.jobId);
       setSandboxJob(completedJob);
+      addCaseEvent({
+        tool: 'sandbox',
+        severity: completedJob.status === 'completed' ? 'success' : completedJob.status === 'failed' ? 'danger' : 'warning',
+        title: 'Browser sandbox finished',
+        detail: `${completedJob.requestedUrl} -> ${completedJob.status}${completedJob.result ? `, ${completedJob.result.downloads.length} download(s), ${completedJob.result.activityJournal.length} journal entries` : ''}`,
+        references: [
+          caseUrlReference(completedJob.requestedUrl, 'sandbox-target'),
+          caseJobReference('browser-sandbox', completedJob.jobId),
+          ...(completedJob.result?.session.sessionId ? [caseSessionReference(completedJob.result.session.sessionId, completedJob.result.access?.url ?? null, completedJob.result.session.provider)] : []),
+          ...(completedJob.result?.screenshotPath ? [caseFileReference('screenshot', completedJob.result.screenshotPath, null, 'screenshot')] : []),
+          ...(completedJob.result?.tracePath ? [caseFileReference('trace', completedJob.result.tracePath, null, 'trace')] : []),
+        ],
+      });
     } catch (launchError) {
-      setError(launchError instanceof Error ? launchError.message : 'Browser sandbox failed.');
+      const message = launchError instanceof Error ? launchError.message : 'Browser sandbox failed.';
+      setError(message);
+      addCaseEvent({
+        tool: 'sandbox',
+        severity: 'danger',
+        title: 'Browser sandbox failed',
+        detail: `${targetUrl}: ${message}`,
+      });
     } finally {
       setIsLaunching(false);
     }
@@ -185,8 +274,26 @@ export function BrowserSandbox() {
       }
 
       setSandboxJob(stoppedJob);
+      addCaseEvent({
+        tool: 'sandbox',
+        severity: 'warning',
+        title: 'Browser sandbox stopped',
+        detail: `${stoppedJob.requestedUrl} -> ${stoppedJob.status}`,
+        references: [
+          caseUrlReference(stoppedJob.requestedUrl, 'sandbox-target'),
+          caseJobReference('browser-sandbox', stoppedJob.jobId),
+        ],
+      });
     } catch (stopError) {
-      setError(stopError instanceof Error ? stopError.message : 'Browser sandbox stop failed.');
+      const message = stopError instanceof Error ? stopError.message : 'Browser sandbox stop failed.';
+      setError(message);
+      addCaseEvent({
+        tool: 'sandbox',
+        severity: 'danger',
+        title: 'Browser sandbox stop failed',
+        detail: message,
+        references: sandboxJob ? [caseJobReference('browser-sandbox', sandboxJob.jobId)] : undefined,
+      });
     }
   };
 
@@ -377,6 +484,45 @@ export function BrowserSandbox() {
           ) : null}
 
           {sandboxJob.result ? (
+            <div className="cli-border p-4">
+              <h3 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4">Final Journal</h3>
+              {(sandboxJob.result.activityJournal ?? []).length ? (
+                <div className="space-y-3 text-sm">
+                  {(sandboxJob.result.activityJournal ?? []).map((entry, index) => (
+                    <div key={`${entry.kind}-${entry.label}-${entry.value || entry.path || index}`} className="border border-cyber-red-dim bg-black/40 p-3 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-bold uppercase">{entry.label}</div>
+                        <SignalBadge tone={toneFromJournalSeverity(entry.severity)}>{entry.kind}</SignalBadge>
+                      </div>
+                      {entry.value ? (
+                        <ObservedValueCard
+                          value={entry.value}
+                          copied={copiedValue === entry.value}
+                          onCopy={handleCopyObservedValue}
+                          className={entry.severity === 'danger' ? 'text-red-400' : ''}
+                        />
+                      ) : null}
+                      {entry.url && entry.url !== entry.value ? (
+                        <div>
+                          <div className="text-xs opacity-70 uppercase mb-2">URL</div>
+                          <ObservedValueCard
+                            value={entry.url}
+                            copied={copiedValue === entry.url}
+                            onCopy={handleCopyObservedValue}
+                          />
+                        </div>
+                      ) : null}
+                      {entry.path ? <div><ArtifactLink filePath={entry.path} label="Open artifact" /></div> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm opacity-70">No final journal entries were captured for this sandbox run.</p>
+              )}
+            </div>
+          ) : null}
+
+          {sandboxJob.result ? (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               <div className="cli-border p-4">
                 <h3 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4">Observed Downloads</h3>
@@ -400,6 +546,11 @@ export function BrowserSandbox() {
                         <div><ArtifactLink filePath={download.path} label="Stored copy" /></div>
                         <div className="break-all">SHA256: {download.sha256}</div>
                         <div>Size: {download.size} bytes</div>
+                        {download.fileAnalysisJobId ? (
+                          <div className="mt-3">
+                            <DownloadAnalysisJobCard job={downloadAnalysisJobs[download.fileAnalysisJobId]} jobId={download.fileAnalysisJobId} />
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -525,4 +676,42 @@ function truncateObservedValue(value: string) {
   }
 
   return `${value.slice(0, OBSERVED_VALUE_MAX_LENGTH)}...`;
+}
+
+function toneFromJournalSeverity(severity: BrowserSandboxJournalEntry['severity']) {
+  switch (severity) {
+    case 'danger':
+      return 'warning';
+    case 'warning':
+      return 'warning';
+    case 'info':
+    default:
+      return 'neutral';
+  }
+}
+
+function DownloadAnalysisJobCard({ job, jobId }: { job?: FileAnalysisJob; jobId: string }) {
+  const primaryResult = job?.results[0];
+
+  return (
+    <div className="border border-cyber-red-dim/60 bg-black/50 p-3 text-xs space-y-2">
+      <div className="text-xs opacity-70 uppercase">Linked File Analysis</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <SignalBadge tone={toneFromScannerStatus(job?.status ?? 'queued')}>{job?.status ?? 'queued'}</SignalBadge>
+        <span className="opacity-70">[{jobId}]</span>
+      </div>
+      {primaryResult ? (
+        <>
+          <div className="font-bold break-all">{primaryResult.filename}</div>
+          <div className="flex flex-wrap gap-2">
+            <SignalBadge tone={toneFromFileVerdict(primaryResult.verdict)}>{primaryResult.verdict}</SignalBadge>
+            <SignalBadge tone={toneFromRiskScore(primaryResult.riskScore)}>{primaryResult.riskScore}</SignalBadge>
+          </div>
+          <div className="opacity-85">{primaryResult.summary}</div>
+        </>
+      ) : (
+        <div className="opacity-70">Analysis job queued. Results will appear here when ready.</div>
+      )}
+    </div>
+  );
 }

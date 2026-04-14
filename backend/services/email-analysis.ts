@@ -15,11 +15,28 @@ export async function analyzeEmail(
   const inconsistencies: string[] = [];
 
   if (parsedEmail.authentication.spf === 'fail') {
-    inconsistencies.push('SPF failed for the sending domain.');
+    inconsistencies.push(
+      parsedEmail.authentication.spfDetails?.reason
+        ? `SPF failed: ${parsedEmail.authentication.spfDetails.reason}.`
+        : 'SPF failed for the sending domain.',
+    );
+  }
+
+  if (parsedEmail.authentication.dkim === 'fail') {
+    inconsistencies.push(
+      parsedEmail.authentication.dkimDetails?.reason
+        ? `DKIM failed: ${parsedEmail.authentication.dkimDetails.reason}.`
+        : 'DKIM failed for the visible sender domain.',
+    );
   }
 
   if (parsedEmail.authentication.dmarc === 'fail') {
-    inconsistencies.push('DMARC failed for the visible sender domain.');
+    const dmarcAction = parsedEmail.authentication.dmarcDetails?.action;
+    inconsistencies.push(
+      dmarcAction
+        ? `DMARC failed for the visible sender domain (action=${dmarcAction}).`
+        : 'DMARC failed for the visible sender domain.',
+    );
   }
 
   if (parsedEmail.headers.from && parsedEmail.headers.returnPath) {
@@ -40,6 +57,10 @@ export async function analyzeEmail(
 
     if (url.decodedUrl.match(/login|verify|secure|update|password|signin/i)) {
       urlSignals.push('The URL uses urgent credential-themed wording.');
+    }
+
+    if (url.wrapperType === 'barracuda' && url.decodedUrl !== url.originalUrl) {
+      urlSignals.push('Barracuda LinkProtect rewrote the visible URL to a different destination.');
     }
 
     if (parsedEmail.authentication.spf === 'fail' || parsedEmail.authentication.dmarc === 'fail') {

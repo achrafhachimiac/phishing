@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Cpu, FileArchive, Upload } from 'lucide-react';
 
 import type { ArchiveTreeNode, ExtractedArchiveTree, FileAnalysisJob, FileIocEnrichment, FileUpload } from '../../shared/analysis-types';
+import { caseFileReference, caseJobReference } from '../case-event-references';
+import { useCaseContext } from '../case-context';
 import { formatSignalLabel } from './signal-format';
 import {
   SignalBadge,
@@ -17,6 +19,7 @@ const FILE_ANALYSIS_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 100
 const FILE_ANALYSIS_MAX_POLL_DURATION_MS = import.meta.env.MODE === 'test' ? 250 : 120000;
 
 export function FileAnalysis() {
+  const { addCaseEvent } = useCaseContext();
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [analysisJob, setAnalysisJob] = useState<FileAnalysisJob | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -31,6 +34,13 @@ export function FileAnalysis() {
     setIsAnalyzing(true);
     setError('');
     setAnalysisJob(null);
+    addCaseEvent({
+      tool: 'files',
+      severity: 'info',
+      title: 'File analysis started',
+      detail: `${selectedFiles.length} file(s): ${selectedFiles.map((file) => file.name).join(', ')}`,
+      references: selectedFiles.map((file) => caseFileReference(file.name)),
+    });
 
     try {
       const filesPayload = await Promise.all(selectedFiles.map(fileToPayload));
@@ -50,8 +60,26 @@ export function FileAnalysis() {
       setAnalysisJob(createdJob);
       const completedJob = await pollFileAnalysisJob(createdJob.jobId);
       setAnalysisJob(completedJob);
+      addCaseEvent({
+        tool: 'files',
+        severity: completedJob.results.some((result) => result.verdict !== 'clean') ? 'warning' : 'success',
+        title: 'File analysis completed',
+        detail: `${completedJob.results.length} result(s) returned for ${completedJob.queuedFiles.join(', ') || 'submitted files'}`,
+        references: [
+          caseJobReference('file-analysis', completedJob.jobId),
+          ...completedJob.queuedFiles.map((filename) => caseFileReference(filename)),
+        ],
+      });
     } catch (analysisError) {
-      setError(analysisError instanceof Error ? analysisError.message : 'File analysis failed.');
+      const message = analysisError instanceof Error ? analysisError.message : 'File analysis failed.';
+      setError(message);
+      addCaseEvent({
+        tool: 'files',
+        severity: 'danger',
+        title: 'File analysis failed',
+        detail: message,
+        references: selectedFiles.map((file) => caseFileReference(file.name)),
+      });
     } finally {
       setIsAnalyzing(false);
     }

@@ -6,15 +6,20 @@ import express from 'express';
 import { ZodError } from 'zod';
 
 import {
+  caseSessionListResponseSchema,
   browserSandboxRequestSchema,
+  caseSessionSchema,
+  currentCaseSessionResponseSchema,
   domainAnalysisRequestSchema,
   emlAnalysisRequestSchema,
   emailParsingRequestSchema,
   fileAnalysisRequestSchema,
   healthResponseSchema,
+  remoteFileAnalysisRequestSchema,
   urlAnalysisRequestSchema,
 } from '../shared/analysis-types.js';
 import { appConfig } from './config.js';
+import { clearCurrentCaseSession, deleteCaseSession, getCaseSession, getCurrentCaseSession, listCaseSessions, saveCurrentCaseSession } from './services/case-session.js';
 import { analyzeDomain, DomainAnalysisError } from './services/domain-analysis.js';
 import {
   BrowserSandboxError,
@@ -27,6 +32,7 @@ import { EmlAnalysisError, enqueueEmlAnalysisJob, getEmlAnalysisJob } from './se
 import { analyzeEmail } from './services/email-analysis.js';
 import { EmailParsingError, parseRawEmail } from './services/email-parser.js';
 import { enqueueFileAnalysisJob, FileAnalysisError, getFileAnalysisJob } from './services/file-analysis.js';
+import { enqueueRemoteFileAnalysisJob, RemoteFileAnalysisError } from './services/remote-file-analysis.js';
 import { enqueueUrlAnalysisJob, getUrlAnalysisJob, UrlAnalysisError } from './services/url-analysis.js';
 import { ensureStorageDirectories } from './storage.js';
 
@@ -42,8 +48,15 @@ type AppDependencies = {
   touchBrowserSandboxJob?: typeof touchBrowserSandboxJob;
   enqueueFileAnalysisJob?: typeof enqueueFileAnalysisJob;
   getFileAnalysisJob?: typeof getFileAnalysisJob;
+  enqueueRemoteFileAnalysisJob?: typeof enqueueRemoteFileAnalysisJob;
   enqueueEmlAnalysisJob?: typeof enqueueEmlAnalysisJob;
   getEmlAnalysisJob?: typeof getEmlAnalysisJob;
+  getCurrentCaseSession?: typeof getCurrentCaseSession;
+  getCaseSession?: typeof getCaseSession;
+  listCaseSessions?: typeof listCaseSessions;
+  saveCurrentCaseSession?: typeof saveCurrentCaseSession;
+  clearCurrentCaseSession?: typeof clearCurrentCaseSession;
+  deleteCaseSession?: typeof deleteCaseSession;
 };
 
 const AUTH_COOKIE_NAME = 'phish_hunter_session';
@@ -62,8 +75,15 @@ export function createApp(dependencies: AppDependencies = {}) {
   const touchBrowserSandboxJobHandler = dependencies.touchBrowserSandboxJob ?? touchBrowserSandboxJob;
   const enqueueFileAnalysisHandler = dependencies.enqueueFileAnalysisJob ?? enqueueFileAnalysisJob;
   const getFileAnalysisJobHandler = dependencies.getFileAnalysisJob ?? getFileAnalysisJob;
+  const enqueueRemoteFileAnalysisHandler = dependencies.enqueueRemoteFileAnalysisJob ?? enqueueRemoteFileAnalysisJob;
   const enqueueEmlAnalysisHandler = dependencies.enqueueEmlAnalysisJob ?? enqueueEmlAnalysisJob;
   const getEmlAnalysisJobHandler = dependencies.getEmlAnalysisJob ?? getEmlAnalysisJob;
+  const getCurrentCaseSessionHandler = dependencies.getCurrentCaseSession ?? getCurrentCaseSession;
+  const getCaseSessionHandler = dependencies.getCaseSession ?? getCaseSession;
+  const listCaseSessionsHandler = dependencies.listCaseSessions ?? listCaseSessions;
+  const saveCurrentCaseSessionHandler = dependencies.saveCurrentCaseSession ?? saveCurrentCaseSession;
+  const clearCurrentCaseSessionHandler = dependencies.clearCurrentCaseSession ?? clearCurrentCaseSession;
+  const deleteCaseSessionHandler = dependencies.deleteCaseSession ?? deleteCaseSession;
   const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
   const clientEntryPath = path.join(clientDistPath, 'index.html');
   const accessPassword = getConfiguredAccessPassword();
@@ -128,6 +148,63 @@ export function createApp(dependencies: AppDependencies = {}) {
     });
 
     response.status(200).json(payload);
+  });
+
+  app.get('/api/cases/current', async (_request, response) => {
+    const currentCaseSession = await getCurrentCaseSessionHandler();
+    response.status(200).json(currentCaseSessionResponseSchema.parse({ case: currentCaseSession }));
+  });
+
+  app.get('/api/cases', async (_request, response) => {
+    const cases = await listCaseSessionsHandler();
+    response.status(200).json(caseSessionListResponseSchema.parse({ cases }));
+  });
+
+  app.post('/api/cases/:caseId/activate', async (request, response) => {
+    const storedCaseSession = await getCaseSessionHandler(request.params.caseId);
+
+    if (!storedCaseSession) {
+      response.status(404).json({
+        error: 'case_session_not_found',
+        message: 'The requested CASE session could not be found.',
+      });
+      return;
+    }
+
+    const activatedCaseSession = await saveCurrentCaseSessionHandler(storedCaseSession);
+    response.status(200).json(activatedCaseSession);
+  });
+
+  app.delete('/api/cases/current', async (_request, response) => {
+    await clearCurrentCaseSessionHandler();
+    response.status(204).end();
+  });
+
+  app.delete('/api/cases/:caseId', async (request, response) => {
+    await deleteCaseSessionHandler(request.params.caseId);
+    response.status(204).end();
+  });
+
+  app.put('/api/cases/current', async (request, response) => {
+    try {
+      const payload = caseSessionSchema.parse(request.body);
+      const savedCaseSession = await saveCurrentCaseSessionHandler(payload);
+
+      response.status(200).json(savedCaseSession);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        response.status(400).json({
+          error: 'invalid_case_session',
+          message: 'A valid CASE session payload is required.',
+        });
+        return;
+      }
+
+      response.status(500).json({
+        error: 'case_session_failed',
+        message: 'CASE session persistence failed unexpectedly.',
+      });
+    }
   });
 
   if (fs.existsSync(clientEntryPath)) {
@@ -397,6 +474,36 @@ export function createApp(dependencies: AppDependencies = {}) {
       response.status(500).json({
         error: 'file_analysis_failed',
         message: 'File analysis job creation failed unexpectedly.',
+      });
+    }
+  });
+
+  app.post('/api/analyze/files/remote', async (request, response) => {
+    try {
+      const payload = remoteFileAnalysisRequestSchema.parse(request.body);
+      const job = await enqueueRemoteFileAnalysisHandler(payload.url);
+
+      response.status(202).json(redactFileJob(job));
+    } catch (error) {
+      if (error instanceof RemoteFileAnalysisError || error instanceof FileAnalysisError) {
+        response.status(400).json({
+          error: error.code,
+          message: error.message,
+        });
+        return;
+      }
+
+      if (error instanceof ZodError) {
+        response.status(400).json({
+          error: 'invalid_remote_file_upload',
+          message: 'A public HTTP(S) file URL is required for remote analysis.',
+        });
+        return;
+      }
+
+      response.status(500).json({
+        error: 'remote_file_analysis_failed',
+        message: 'Remote file analysis job creation failed unexpectedly.',
       });
     }
   });

@@ -9,12 +9,15 @@ import {
   browserSandboxJobSchema,
   type BrowserSandboxArtifact,
   type BrowserSandboxJob,
+  type BrowserSandboxJournalEntry,
   type BrowserSandboxResult,
+  type FileUpload,
   type ObservedDownload,
   type BrowserSandboxSession,
 } from '../../shared/analysis-types.js';
 import { appConfig } from '../config.js';
 import { getStoragePaths } from '../storage.js';
+import { enqueueFileAnalysisJob } from './file-analysis.js';
 import { buildBrowserSandboxAccess } from './browser-sandbox-provider.js';
 import { resolveBrowserSandboxRuntime } from './browser-sandbox-runtime.js';
 import { startBrowserSandboxSession, stopBrowserSandboxSession } from './browser-sandbox-session.js';
@@ -142,6 +145,7 @@ export async function stopBrowserSandboxJob(
           consoleErrors: [],
           downloads: [],
           artifacts: [],
+          activityJournal: [],
           status: 'stopped',
           error: stopMessage,
         },
@@ -263,6 +267,7 @@ async function runBrowserSandboxJob(
           consoleErrors: [],
           downloads: [],
           artifacts: [],
+          activityJournal: [],
           status: 'failed',
           error: error instanceof Error ? error.message : 'Browser sandbox failed unexpectedly.',
         },
@@ -445,6 +450,7 @@ function attachLiveObservationPage(jobId: string, page: Page, handle: LiveObserv
     try {
       await download.saveAs(targetPath);
       const fileBuffer = await fs.readFile(targetPath);
+      const fileAnalysisJob = await enqueueObservedDownloadFileAnalysis(suggestedFilename, fileBuffer);
       mergeLiveObservation(jobId, {
         downloads: [{
           filename: suggestedFilename,
@@ -452,6 +458,7 @@ function attachLiveObservationPage(jobId: string, page: Page, handle: LiveObserv
           url: download.url() || null,
           sha256: createHash('sha256').update(fileBuffer).digest('hex'),
           size: fileBuffer.byteLength,
+          fileAnalysisJobId: fileAnalysisJob.jobId,
         }],
       });
     } catch {
@@ -550,6 +557,18 @@ function mergeLiveObservation(
         existingJob.result.tracePath,
         nextDownloads,
       ),
+      activityJournal: buildBrowserSandboxActivityJournal({
+        redirectChain: mergeStringValues(existingJob.result.redirectChain, updates.redirectChain ?? []),
+        requestedDomains: mergeStringValues(existingJob.result.requestedDomains, updates.requestedDomains ?? []),
+        scriptUrls: mergeStringValues(existingJob.result.scriptUrls, updates.scriptUrls ?? []),
+        consoleErrors: mergeStringValues(existingJob.result.consoleErrors, updates.consoleErrors ?? []),
+        downloads: nextDownloads,
+        artifacts: buildBrowserSandboxArtifacts(
+          updates.screenshotPath ?? existingJob.result.screenshotPath,
+          existingJob.result.tracePath,
+          nextDownloads,
+        ),
+      }),
     },
   });
 }
@@ -635,12 +654,14 @@ export async function analyzeUrlInLocalSandbox(
     const targetPath = path.join(downloadsDirectory, suggestedFilename);
     await download.saveAs(targetPath);
     const fileBuffer = await fs.readFile(targetPath);
+    const fileAnalysisJob = await enqueueObservedDownloadFileAnalysis(suggestedFilename, fileBuffer);
     downloads.push({
       filename: suggestedFilename,
       path: targetPath,
       url: download.url() || null,
       sha256: createHash('sha256').update(fileBuffer).digest('hex'),
       size: fileBuffer.byteLength,
+      fileAnalysisJobId: fileAnalysisJob.jobId,
     });
   });
 
@@ -666,6 +687,14 @@ export async function analyzeUrlInLocalSandbox(
     }
 
     const artifacts = buildBrowserSandboxArtifacts(screenshotPath, tracePath, downloads);
+    const activityJournal = buildBrowserSandboxActivityJournal({
+      redirectChain,
+      requestedDomains: [...requestedDomains],
+      scriptUrls: [...scriptUrls],
+      consoleErrors,
+      downloads,
+      artifacts,
+    });
 
     return {
       finalUrl,
@@ -680,10 +709,12 @@ export async function analyzeUrlInLocalSandbox(
       consoleErrors,
       downloads,
       artifacts,
+      activityJournal,
       status: 'completed',
       error: null,
     };
   } catch (error) {
+    const artifacts = buildBrowserSandboxArtifacts(screenshotPath, null, downloads);
     return {
       finalUrl: null,
       title: null,
@@ -696,7 +727,15 @@ export async function analyzeUrlInLocalSandbox(
       scriptUrls: [...scriptUrls],
       consoleErrors,
       downloads,
-      artifacts: buildBrowserSandboxArtifacts(screenshotPath, null, downloads),
+      artifacts,
+      activityJournal: buildBrowserSandboxActivityJournal({
+        redirectChain,
+        requestedDomains: [...requestedDomains],
+        scriptUrls: [...scriptUrls],
+        consoleErrors,
+        downloads,
+        artifacts,
+      }),
       status: 'failed',
       error: error instanceof Error ? error.message : 'Browser sandbox failed unexpectedly.',
     };
@@ -746,6 +785,85 @@ function buildBrowserSandboxArtifacts(
   }
 
   return artifacts;
+}
+
+function buildBrowserSandboxActivityJournal(input: {
+  redirectChain: string[];
+  requestedDomains: string[];
+  scriptUrls: string[];
+  consoleErrors: string[];
+  downloads: ObservedDownload[];
+  artifacts: BrowserSandboxArtifact[];
+}): BrowserSandboxJournalEntry[] {
+  const entries: BrowserSandboxJournalEntry[] = [];
+
+  input.redirectChain.forEach((url, index) => {
+    entries.push({
+      kind: 'navigation',
+      label: index === input.redirectChain.length - 1 ? 'Final navigation target' : 'Redirect hop',
+      value: url,
+      path: null,
+      url,
+      severity: 'info',
+    });
+  });
+
+  input.requestedDomains.forEach((domain) => {
+    entries.push({
+      kind: 'request_domain',
+      label: 'Requested domain',
+      value: domain,
+      path: null,
+      url: null,
+      severity: 'info',
+    });
+  });
+
+  input.scriptUrls.forEach((scriptUrl) => {
+    entries.push({
+      kind: 'script_url',
+      label: 'Loaded script',
+      value: scriptUrl,
+      path: null,
+      url: scriptUrl,
+      severity: 'warning',
+    });
+  });
+
+  input.consoleErrors.forEach((consoleError) => {
+    entries.push({
+      kind: 'console_error',
+      label: 'Console error',
+      value: consoleError,
+      path: null,
+      url: null,
+      severity: 'danger',
+    });
+  });
+
+  input.downloads.forEach((download) => {
+    entries.push({
+      kind: 'download',
+      label: `Downloaded file: ${download.filename}`,
+      value: download.sha256,
+      path: download.path,
+      url: download.url,
+      severity: 'warning',
+    });
+  });
+
+  input.artifacts.forEach((artifact) => {
+    entries.push({
+      kind: 'artifact',
+      label: `Captured artifact: ${artifact.label}`,
+      value: artifact.type,
+      path: artifact.path,
+      url: null,
+      severity: artifact.type === 'download' ? 'warning' : 'info',
+    });
+  });
+
+  return entries;
 }
 
 function buildUnavailableSandboxSession(jobId: string, includeStoppedAt = false): BrowserSandboxSession {
@@ -815,4 +933,14 @@ function createSafeTraceFilename(url: string) {
 
 function buildExpiryTimestamp() {
   return new Date(Date.now() + 15 * 60 * 1000).toISOString();
+}
+
+async function enqueueObservedDownloadFileAnalysis(filename: string, fileBuffer: Buffer) {
+  const fileUpload: FileUpload = {
+    filename,
+    contentType: null,
+    contentBase64: fileBuffer.toString('base64'),
+  };
+
+  return enqueueFileAnalysisJob([fileUpload]);
 }

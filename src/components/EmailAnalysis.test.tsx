@@ -28,6 +28,33 @@ describe('EmailAnalysis', () => {
           spf: 'fail',
           dkim: 'pass',
           dmarc: 'fail',
+          spfDetails: {
+            status: 'fail',
+            reason: 'Envelope sender IP is not authorized',
+            smtpMailFrom: 'secure-example.test',
+            headerFrom: null,
+            headerDomain: null,
+            selector: null,
+            action: null,
+          },
+          dkimDetails: {
+            status: 'pass',
+            reason: null,
+            smtpMailFrom: null,
+            headerFrom: null,
+            headerDomain: 'secure-example.test',
+            selector: 'smtpapi',
+            action: null,
+          },
+          dmarcDetails: {
+            status: 'fail',
+            reason: null,
+            smtpMailFrom: null,
+            headerFrom: 'secure-example.test',
+            headerDomain: null,
+            selector: null,
+            action: 'quarantine',
+          },
         },
         urls: [
           {
@@ -98,9 +125,11 @@ describe('EmailAnalysis', () => {
     });
 
     expect(await screen.findByText(/the email shows authentication anomalies/i)).toBeInTheDocument();
-  expect(screen.getAllByText('HIGH').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('HIGH').length).toBeGreaterThan(0);
     expect(screen.getByText('alerts@secure-example.test')).toBeInTheDocument();
     expect(screen.getByText(/spf failed for the sending domain/i)).toBeInTheDocument();
+    expect(screen.getByText(/reason: envelope sender ip is not authorized/i)).toBeInTheDocument();
+    expect(screen.getByText(/policy action: quarantine/i)).toBeInTheDocument();
     expect(screen.getByText(/related domains/i)).toBeInTheDocument();
     expect(screen.getByText(/relation: url/i)).toBeInTheDocument();
     expect(screen.getByText(/recently created domain with suspicious keyword patterns/i)).toBeInTheDocument();
@@ -123,6 +152,33 @@ describe('EmailAnalysis', () => {
             spf: 'fail',
             dkim: 'pass',
             dmarc: 'fail',
+            spfDetails: {
+              status: 'fail',
+              reason: null,
+              smtpMailFrom: 'secure-example.test',
+              headerFrom: null,
+              headerDomain: null,
+              selector: null,
+              action: null,
+            },
+            dkimDetails: {
+              status: 'pass',
+              reason: null,
+              smtpMailFrom: null,
+              headerFrom: null,
+              headerDomain: 'secure-example.test',
+              selector: null,
+              action: null,
+            },
+            dmarcDetails: {
+              status: 'fail',
+              reason: null,
+              smtpMailFrom: null,
+              headerFrom: 'secure-example.test',
+              headerDomain: null,
+              selector: null,
+              action: 'quarantine',
+            },
           },
           urls: [
             {
@@ -234,5 +290,116 @@ describe('EmailAnalysis', () => {
     expect(screen.getByText(/alienvault otx:/i)).toBeInTheDocument();
     expect(screen.getAllByText('unavailable').length).toBeGreaterThan(0);
     expect(screen.getByText(/storage\/traces\/job_test_123\/example.zip/i)).toBeInTheDocument();
+  });
+
+  it('launches remote file analysis for downloadable URLs extracted from the email', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          headers: {
+            from: 'alerts@secure-example.test',
+            to: 'victim@example.org',
+            subject: 'Review brochure',
+            date: 'Tue, 08 Apr 2026 10:00:00 +0000',
+            messageId: '<abc@example.test>',
+            returnPath: 'bounce@mailer.secure-example.test',
+          },
+          authentication: {
+            spf: 'pass',
+            dkim: 'pass',
+            dmarc: 'pass',
+          },
+          urls: [
+            {
+              originalUrl: 'https://tournoi7decoeur.com/wp-content/uploads/2026/03/brochure.pdf',
+              decodedUrl: 'https://tournoi7decoeur.com/wp-content/uploads/2026/03/brochure.pdf',
+              suspicious: false,
+              reason: 'No high-confidence issue detected from the static checks.',
+              wrapperType: 'none',
+            },
+          ],
+          inconsistencies: [],
+          threatLevel: 'LOW',
+          executiveSummary: 'The email contains limited suspicious evidence from the current static analysis.',
+          emailAddresses: ['alerts@secure-example.test', 'victim@example.org'],
+          domains: ['secure-example.test', 'tournoi7decoeur.com'],
+          ipAddresses: [],
+          attachments: [],
+          relatedDomains: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'file_job_remote_123',
+          status: 'queued',
+          queuedFiles: ['brochure.pdf'],
+          results: [],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'file_job_remote_123',
+          status: 'completed',
+          queuedFiles: ['brochure.pdf'],
+          results: [
+            {
+              filename: 'brochure.pdf',
+              contentType: 'application/pdf',
+              detectedType: 'pdf',
+              extension: 'pdf',
+              size: 256,
+              sha256: 'remote123',
+              extractedUrls: [],
+              indicators: [],
+              parserReports: [],
+              riskScoreBreakdown: {
+                totalScore: 0,
+                thresholds: { suspicious: 25, malicious: 70 },
+                factors: [],
+              },
+              riskScore: 0,
+              iocEnrichment: {
+                status: 'completed',
+                extractedUrls: [],
+                extractedDomains: [],
+                results: [],
+                summary: 'No enrichable URLs or domains were extracted from this file.',
+                updatedAt: '2026-04-12T12:00:00.000Z',
+              },
+              verdict: 'clean',
+              summary: 'No high-confidence malicious indicators were found during static analysis.',
+              storagePath: null,
+              artifacts: [],
+              externalScans: {
+                virustotal: { status: 'unavailable', malicious: null, suspicious: null, reference: null },
+                clamav: { status: 'clean', signature: null, engine: null, detail: null },
+                yara: { status: 'clean', rules: [], detail: null },
+              },
+            },
+          ],
+        }),
+      } as Response);
+
+    render(<EmailAnalysis />);
+
+    fireEvent.change(screen.getByPlaceholderText(/paste full raw email source/i), {
+      target: { value: 'From: alerts@secure-example.test' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /decode & analyze/i }));
+
+    expect(await screen.findByText(/analyze remote file/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /analyze remote file/i }));
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/analyze/files/remote', expect.objectContaining({ method: 'POST' }));
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/analyze/files/file_job_remote_123', expect.anything());
+    });
+
+    expect((await screen.findAllByText(/brochure.pdf/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/no high-confidence malicious indicators were found during static analysis/i)).toBeInTheDocument();
   });
 });

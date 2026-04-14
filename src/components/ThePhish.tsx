@@ -1,15 +1,21 @@
 import React, { useMemo, useState } from 'react';
 import { AlertOctagon, Cpu, FileWarning, Inbox, Mail, Paperclip, ShieldCheck, Upload } from 'lucide-react';
 
-import type { CortexAnalyzerResult, EmlAnalysisJob, FileIocProviderResult, FileStaticAnalysisResult } from '../../shared/analysis-types';
+import type { CortexAnalyzerResult, EmailAuthenticationDetail, EmlAnalysisJob, FileAnalysisJob, FileIocProviderResult, FileStaticAnalysisResult } from '../../shared/analysis-types';
+import { caseFileReference, caseJobReference, caseUrlReference } from '../case-event-references';
+import { useCaseContext } from '../case-context';
 import { SignalBadge, SignalPanel, toneFromFileVerdict, toneFromRiskLevel, toneFromRiskScore, toneFromScannerStatus } from './signal-display';
 
 const EML_POLL_INTERVAL_MS = import.meta.env.MODE === 'test' ? 1 : 1000;
 const EML_MAX_POLL_ATTEMPTS = 120;
 
 export function ThePhish() {
+  const { addCaseEvent } = useCaseContext();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [job, setJob] = useState<EmlAnalysisJob | null>(null);
+  const [remoteFileJobs, setRemoteFileJobs] = useState<Record<string, FileAnalysisJob>>({});
+  const [remoteFileErrors, setRemoteFileErrors] = useState<Record<string, string>>({});
+  const [remoteFileLoadingUrl, setRemoteFileLoadingUrl] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [error, setError] = useState('');
@@ -37,6 +43,16 @@ export function ThePhish() {
     setIsAnalyzing(true);
     setError('');
     setJob(null);
+    setRemoteFileJobs({});
+    setRemoteFileErrors({});
+    setRemoteFileLoadingUrl(null);
+    addCaseEvent({
+      tool: 'thephish',
+      severity: 'info',
+      title: 'THEPHISH intake started',
+      detail: `${selectedFile.name} (${selectedFile.size} bytes)`,
+      references: [caseFileReference(selectedFile.name)],
+    });
 
     try {
       setSelectedFile(validateEmlFile(selectedFile));
@@ -60,8 +76,26 @@ export function ThePhish() {
       setJob(createdJob);
       const completedJob = await pollEmlJob(createdJob.jobId);
       setJob(completedJob);
+      addCaseEvent({
+        tool: 'thephish',
+        severity: completedJob.consolidatedThreatLevel && completedJob.consolidatedThreatLevel !== 'LOW' ? 'warning' : 'success',
+        title: 'THEPHISH intake completed',
+        detail: `${completedJob.filename} -> ${completedJob.consolidatedThreatLevel || completedJob.status}, ${completedJob.attachmentResults.length} attachment result(s)`,
+        references: [
+          caseFileReference(completedJob.filename),
+          caseJobReference('eml-analysis', completedJob.jobId),
+          ...(completedJob.fileAnalysisJobId ? [caseJobReference('file-analysis', completedJob.fileAnalysisJobId)] : []),
+        ],
+      });
     } catch (analysisError) {
-      setError(analysisError instanceof Error ? analysisError.message : 'EML analysis failed.');
+      const message = analysisError instanceof Error ? analysisError.message : 'EML analysis failed.';
+      setError(message);
+      addCaseEvent({
+        tool: 'thephish',
+        severity: 'danger',
+        title: 'THEPHISH intake failed',
+        detail: message,
+      });
     } finally {
       setIsAnalyzing(false);
     }
@@ -96,9 +130,25 @@ export function ThePhish() {
       const validatedFile = validateEmlFile(file);
       setSelectedFile(validatedFile);
       setError('');
+      if (validatedFile) {
+        addCaseEvent({
+          tool: 'thephish',
+          severity: 'info',
+          title: 'EML evidence selected',
+          detail: `${validatedFile.name} (${validatedFile.size} bytes)`,
+          references: [caseFileReference(validatedFile.name)],
+        });
+      }
     } catch (validationError) {
       setSelectedFile(null);
-      setError(validationError instanceof Error ? validationError.message : 'Invalid EML file.');
+      const message = validationError instanceof Error ? validationError.message : 'Invalid EML file.';
+      setError(message);
+      addCaseEvent({
+        tool: 'thephish',
+        severity: 'danger',
+        title: 'Invalid EML evidence',
+        detail: message,
+      });
     }
   };
 
@@ -106,6 +156,87 @@ export function ThePhish() {
     event.preventDefault();
     setIsDragActive(false);
     handleFileSelection(event.dataTransfer.files?.[0] ?? null);
+  };
+
+  const handleAnalyzeRemoteFile = async (url: string) => {
+    setRemoteFileLoadingUrl(url);
+    setRemoteFileErrors((current) => ({ ...current, [url]: '' }));
+    addCaseEvent({
+      tool: 'thephish',
+      severity: 'info',
+      title: 'Remote file queued from THEPHISH',
+      detail: url,
+        references: [caseUrlReference(url, 'remote-file')],
+    });
+
+    try {
+      const createResponse = await fetch('/api/analyze/files/remote', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url }),
+      });
+      const createdJob = (await createResponse.json()) as FileAnalysisJob | { message?: string };
+
+      if (!createResponse.ok || !('jobId' in createdJob)) {
+        throw new Error(('message' in createdJob && createdJob.message) || 'Remote file analysis failed to start.');
+      }
+
+      setRemoteFileJobs((current) => ({ ...current, [url]: createdJob }));
+      const completedJob = await pollRemoteFileJob(createdJob.jobId, url);
+      setRemoteFileJobs((current) => ({ ...current, [url]: completedJob }));
+      addCaseEvent({
+        tool: 'thephish',
+        severity: completedJob.status === 'completed' ? 'success' : 'warning',
+        title: 'Remote file analysis finished',
+        detail: `${url} -> ${completedJob.status}`,
+        references: [
+          caseUrlReference(url, 'remote-file'),
+          caseJobReference('file-analysis', completedJob.jobId),
+          ...completedJob.results.slice(0, 1).map((result) => caseFileReference(result.filename, result.storagePath, url, 'analyzed-file')),
+        ],
+      });
+    } catch (remoteFileError) {
+      const message = remoteFileError instanceof Error ? remoteFileError.message : 'Remote file analysis failed.';
+      setRemoteFileErrors((current) => ({
+        ...current,
+        [url]: message,
+      }));
+      addCaseEvent({
+        tool: 'thephish',
+        severity: 'danger',
+        title: 'Remote file analysis failed',
+        detail: `${url}: ${message}`,
+        references: [caseUrlReference(url, 'remote-file')],
+      });
+    } finally {
+      setRemoteFileLoadingUrl((current) => (current === url ? null : current));
+    }
+  };
+
+  const pollRemoteFileJob = async (jobId: string, url: string) => {
+    for (let attempt = 0; attempt < EML_MAX_POLL_ATTEMPTS; attempt += 1) {
+      const response = await fetch(`/api/analyze/files/${jobId}`, {
+        method: 'GET',
+      });
+      const payload = (await response.json()) as FileAnalysisJob | { message?: string };
+
+      if (!response.ok || !('jobId' in payload)) {
+        throw new Error(('message' in payload && payload.message) || 'Remote file analysis polling failed.');
+      }
+
+      setRemoteFileJobs((current) => ({ ...current, [url]: payload }));
+      if (payload.status === 'completed' || payload.status === 'failed') {
+        return payload;
+      }
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, EML_POLL_INTERVAL_MS);
+      });
+    }
+
+    throw new Error('Remote file analysis polling timed out.');
   };
 
   return (
@@ -224,16 +355,10 @@ export function ThePhish() {
                     <div className="uppercase text-xs opacity-70 mb-2 flex items-center gap-2">
                       <ShieldCheck size={14} /> Authentication
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      <SignalBadge tone={toneFromScannerStatus(job.emailAnalysis.authentication.spf)}>
-                        SPF {job.emailAnalysis.authentication.spf || 'unknown'}
-                      </SignalBadge>
-                      <SignalBadge tone={toneFromScannerStatus(job.emailAnalysis.authentication.dkim)}>
-                        DKIM {job.emailAnalysis.authentication.dkim || 'unknown'}
-                      </SignalBadge>
-                      <SignalBadge tone={toneFromScannerStatus(job.emailAnalysis.authentication.dmarc)}>
-                        DMARC {job.emailAnalysis.authentication.dmarc || 'unknown'}
-                      </SignalBadge>
+                    <div className="space-y-2">
+                      <CompactAuthenticationDetail label="SPF" status={job.emailAnalysis.authentication.spf} detail={job.emailAnalysis.authentication.spfDetails} />
+                      <CompactAuthenticationDetail label="DKIM" status={job.emailAnalysis.authentication.dkim} detail={job.emailAnalysis.authentication.dkimDetails} />
+                      <CompactAuthenticationDetail label="DMARC" status={job.emailAnalysis.authentication.dmarc} detail={job.emailAnalysis.authentication.dmarcDetails} />
                     </div>
                   </div>
                 </div>
@@ -285,7 +410,13 @@ export function ThePhish() {
             <div className="cli-border p-4">
               <h4 className="text-lg border-b border-cyber-red-dim pb-2 uppercase mb-4">Observable Inventory</h4>
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 text-sm">
-                <PanelList title="Parsed URLs" values={job.emailAnalysis.urls.map((url) => `${url.decodedUrl}${url.suspicious ? ' :: suspicious' : ''}`)} emptyMessage="No URLs extracted from the message." />
+                <ParsedUrlList
+                  urls={job.emailAnalysis.urls}
+                  remoteFileJobs={remoteFileJobs}
+                  remoteFileErrors={remoteFileErrors}
+                  remoteFileLoadingUrl={remoteFileLoadingUrl}
+                  onAnalyzeRemoteFile={handleAnalyzeRemoteFile}
+                />
                 <PanelList title="Email Addresses" values={job.emailAnalysis.emailAddresses} emptyMessage="No email addresses extracted." />
                 <PanelList title="Domains" values={job.emailAnalysis.domains} emptyMessage="No domains extracted." />
                 <PanelList title="IP Addresses" values={job.emailAnalysis.ipAddresses} emptyMessage="No IP addresses extracted." />
@@ -497,6 +628,127 @@ function PanelList({
       )}
     </div>
   );
+}
+
+function ParsedUrlList({
+  urls,
+  remoteFileJobs,
+  remoteFileErrors,
+  remoteFileLoadingUrl,
+  onAnalyzeRemoteFile,
+}: {
+  urls: NonNullable<EmlAnalysisJob['emailAnalysis']>['urls'];
+  remoteFileJobs: Record<string, FileAnalysisJob>;
+  remoteFileErrors: Record<string, string>;
+  remoteFileLoadingUrl: string | null;
+  onAnalyzeRemoteFile: (url: string) => Promise<void>;
+}) {
+  return (
+    <div>
+      <div className="uppercase text-xs opacity-70 mb-2">Parsed URLs</div>
+      {urls.length === 0 ? (
+        <p className="text-xs opacity-70">No URLs extracted from the message.</p>
+      ) : (
+        <div className="space-y-2">
+          {urls.map((url) => (
+            <div key={`${url.originalUrl}-${url.decodedUrl}`}>
+              <SignalPanel tone={url.suspicious ? 'warning' : 'neutral'} className="p-3 text-xs space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  <SignalBadge tone={url.suspicious ? 'warning' : 'safe'}>{url.suspicious ? 'suspicious' : 'clean'}</SignalBadge>
+                  {url.wrapperType ? <SignalBadge tone={url.wrapperType === 'barracuda' ? 'warning' : 'neutral'}>{url.wrapperType}</SignalBadge> : null}
+                </div>
+                <div className="break-all">Original: {url.originalUrl}</div>
+                <div className="break-all">Destination: {url.decodedUrl}</div>
+                {url.resolutionChain && url.resolutionChain.length > 0 ? (
+                  <div className="space-y-1 opacity-80">
+                    {url.resolutionChain.map((step) => (
+                      <div key={`${step.label}-${step.url}`} className="break-all">{step.label}: {step.url}</div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="opacity-85">{url.reason}</div>
+                {looksLikeDownloadableFileUrl(url.decodedUrl) ? (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => void onAnalyzeRemoteFile(url.decodedUrl)}
+                      disabled={remoteFileLoadingUrl === url.decodedUrl}
+                      className="cli-button py-2 px-3 text-xs"
+                    >
+                      {remoteFileLoadingUrl === url.decodedUrl ? 'ANALYZING REMOTE FILE...' : 'ANALYZE REMOTE FILE'}
+                    </button>
+                    {remoteFileErrors[url.decodedUrl] ? <div className="text-red-400">{remoteFileErrors[url.decodedUrl]}</div> : null}
+                    {remoteFileJobs[url.decodedUrl] ? <RemoteFileJobCard job={remoteFileJobs[url.decodedUrl]} /> : null}
+                  </div>
+                ) : null}
+              </SignalPanel>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RemoteFileJobCard({ job }: { job: FileAnalysisJob }) {
+  const result = job.results[0];
+
+  return (
+    <div className="border border-cyber-red-dim bg-black/40 p-3 text-xs space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <SignalBadge tone={toneFromScannerStatus(job.status)}>{job.status}</SignalBadge>
+        <div className="opacity-70">Job {job.jobId}</div>
+      </div>
+      {result ? (
+        <>
+          <div className="font-bold break-all">{result.filename}</div>
+          <div className="flex flex-wrap gap-2">
+            <SignalBadge tone={toneFromFileVerdict(result.verdict)}>{result.verdict}</SignalBadge>
+            <SignalBadge tone={toneFromRiskScore(result.riskScore)}>{result.riskScore}</SignalBadge>
+          </div>
+          <div className="opacity-85">{result.summary}</div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function CompactAuthenticationDetail({
+  label,
+  status,
+  detail,
+}: {
+  label: string;
+  status: string | null | undefined;
+  detail: EmailAuthenticationDetail | undefined;
+}) {
+  const extraDetail = detail?.reason
+    ? detail.reason
+    : detail?.action
+      ? `action=${detail.action}`
+      : detail?.headerDomain
+        ? `domain=${detail.headerDomain}`
+        : null;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-2">
+        <SignalBadge tone={toneFromScannerStatus(status)}>
+          {label} {status || 'unknown'}
+        </SignalBadge>
+      </div>
+      {extraDetail ? <div className="text-xs opacity-75">{extraDetail}</div> : null}
+    </div>
+  );
+}
+
+function looksLikeDownloadableFileUrl(url: string) {
+  try {
+    const parsedUrl = new URL(url);
+    return /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|zip|7z|rar|eml|msg|rtf|csv|txt)$/i.test(parsedUrl.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function RelatedDomainList({ domains }: { domains: NonNullable<EmlAnalysisJob['emailAnalysis']>['relatedDomains'] }) {

@@ -2,9 +2,12 @@ import React, { useState } from 'react';
 import { Globe, Search, ExternalLink, Activity, Server, AlertTriangle } from 'lucide-react';
 
 import type { DomainAnalysisResponse } from '../../shared/analysis-types';
+import { caseDomainReference } from '../case-event-references';
+import { useCaseContext } from '../case-context';
 import { SignalBadge, SignalPanel, SignalText, isBlinkingSignal, toneFromRiskLevel, toneFromRiskScore, toneFromScannerStatus } from './signal-display';
 
 export function DomainAnalysis() {
+  const { addCaseEvent } = useCaseContext();
   const [domain, setDomain] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<DomainAnalysisResponse | null>(null);
@@ -17,6 +20,13 @@ export function DomainAnalysis() {
     setIsAnalyzing(true);
     setResults(null);
     setError('');
+    addCaseEvent({
+      tool: 'domain',
+      severity: 'info',
+      title: 'Domain analysis started',
+      detail: domain,
+      references: [caseDomainReference(domain)],
+    });
 
     try {
       const response = await fetch('/api/analyze/domain', {
@@ -33,9 +43,25 @@ export function DomainAnalysis() {
         throw new Error(payload.message || 'Domain analysis failed.');
       }
 
-      setResults(payload as DomainAnalysisResponse);
+      const result = payload as DomainAnalysisResponse;
+      setResults(result);
+      addCaseEvent({
+        tool: 'domain',
+        severity: result.riskLevel === 'HIGH' ? 'warning' : 'success',
+        title: 'Domain analysis completed',
+        detail: `${result.normalizedDomain} scored ${result.score}/100 (${result.riskLevel})`,
+        references: [caseDomainReference(result.normalizedDomain)],
+      });
     } catch (analysisError) {
-      setError(analysisError instanceof Error ? analysisError.message : 'Domain analysis failed.');
+      const message = analysisError instanceof Error ? analysisError.message : 'Domain analysis failed.';
+      setError(message);
+      addCaseEvent({
+        tool: 'domain',
+        severity: 'danger',
+        title: 'Domain analysis failed',
+        detail: `${domain}: ${message}`,
+        references: [caseDomainReference(domain)],
+      });
     } finally {
       setIsAnalyzing(false);
     }

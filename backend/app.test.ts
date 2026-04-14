@@ -26,6 +26,152 @@ describe('backend app', () => {
     );
   });
 
+  it('returns the persisted current case session when one exists', async () => {
+    const app = createApp({
+      getCurrentCaseSession: async () => ({
+        caseId: 'CASE-202604141200-01',
+        startedAt: '2026-04-14T12:00:00.000Z',
+        updatedAt: '2026-04-14T12:05:00.000Z',
+        activeTab: 'email',
+        visitedTabs: ['domain', 'email'],
+        events: [
+          {
+            id: 'evt-1',
+            tool: 'email',
+            title: 'Email analysis completed',
+            detail: 'HIGH threat with 1 URL',
+            severity: 'warning',
+            occurredAt: '2026-04-14T12:02:00.000Z',
+          },
+        ],
+      }),
+    });
+
+    const response = await request(app).get('/api/cases/current');
+
+    expect(response.status).toBe(200);
+    expect(response.body.case.caseId).toBe('CASE-202604141200-01');
+    expect(response.body.case.activeTab).toBe('email');
+    expect(response.body.case.events).toHaveLength(1);
+  });
+
+  it('lists persisted case sessions', async () => {
+    const app = createApp({
+      listCaseSessions: async () => ([
+        {
+          caseId: 'CASE-202604141200-01',
+          startedAt: '2026-04-14T12:00:00.000Z',
+          updatedAt: '2026-04-14T12:05:00.000Z',
+          activeTab: 'email',
+          visitedTabs: ['domain', 'email'],
+          eventCount: 3,
+        },
+      ]),
+    });
+
+    const response = await request(app).get('/api/cases');
+
+    expect(response.status).toBe(200);
+    expect(response.body.cases).toHaveLength(1);
+    expect(response.body.cases[0]).toEqual(expect.objectContaining({
+      caseId: 'CASE-202604141200-01',
+      eventCount: 3,
+    }));
+  });
+
+  it('activates a saved case session as the current case', async () => {
+    const app = createApp({
+      getCaseSession: async () => ({
+        caseId: 'CASE-202604141230-03',
+        startedAt: '2026-04-14T12:30:00.000Z',
+        updatedAt: '2026-04-14T12:35:00.000Z',
+        activeTab: 'files',
+        visitedTabs: ['domain', 'files'],
+        events: [
+          {
+            id: 'evt-1',
+            tool: 'files',
+            title: 'File analysis completed',
+            detail: 'invoice.zip -> completed',
+            severity: 'success',
+            occurredAt: '2026-04-14T12:34:00.000Z',
+          },
+        ],
+      }),
+      saveCurrentCaseSession: async (caseSession) => ({
+        ...caseSession,
+        updatedAt: '2026-04-14T12:40:00.000Z',
+      }),
+    });
+
+    const response = await request(app).post('/api/cases/CASE-202604141230-03/activate');
+
+    expect(response.status).toBe(200);
+    expect(response.body.caseId).toBe('CASE-202604141230-03');
+    expect(response.body.updatedAt).toBe('2026-04-14T12:40:00.000Z');
+  });
+
+  it('deletes an archived case session', async () => {
+    let deletedCaseId: string | null = null;
+    const app = createApp({
+      deleteCaseSession: async (caseId) => {
+        deletedCaseId = caseId;
+      },
+    });
+
+    const response = await request(app).delete('/api/cases/CASE-202604141230-03');
+
+    expect(response.status).toBe(204);
+    expect(deletedCaseId).toBe('CASE-202604141230-03');
+  });
+
+  it('persists the current case session', async () => {
+    const app = createApp({
+      saveCurrentCaseSession: async (caseSession) => ({
+        ...caseSession,
+        updatedAt: '2026-04-14T12:05:00.000Z',
+      }),
+    });
+
+    const response = await request(app)
+      .put('/api/cases/current')
+      .send({
+        caseId: 'CASE-202604141200-01',
+        startedAt: '2026-04-14T12:00:00.000Z',
+        updatedAt: '2026-04-14T12:00:00.000Z',
+        activeTab: 'email',
+        visitedTabs: ['domain', 'email'],
+        events: [
+          {
+            id: 'evt-1',
+            tool: 'email',
+            title: 'Email analysis completed',
+            detail: 'HIGH threat with 1 URL',
+            severity: 'warning',
+            occurredAt: '2026-04-14T12:02:00.000Z',
+          },
+        ],
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.updatedAt).toBe('2026-04-14T12:05:00.000Z');
+    expect(response.body.visitedTabs).toEqual(['domain', 'email']);
+  });
+
+  it('clears the persisted current case session', async () => {
+    let cleared = false;
+    const app = createApp({
+      clearCurrentCaseSession: async () => {
+        cleared = true;
+      },
+    });
+
+    const response = await request(app).delete('/api/cases/current');
+
+    expect(response.status).toBe(204);
+    expect(cleared).toBe(true);
+  });
+
   it('serves the frontend entrypoint from the release dist directory', async () => {
     const clientDistPath = path.resolve(appConfig.storageRoot, '..', 'dist');
     const clientEntryPath = path.join(clientDistPath, 'index.html');
@@ -750,6 +896,7 @@ describe('backend app', () => {
           consoleErrors: [],
           downloads: [],
           artifacts: [],
+          activityJournal: [],
           status: 'stopped',
           error: 'Sandbox session stopped by analyst.',
         },
@@ -823,6 +970,7 @@ describe('backend app', () => {
           consoleErrors: [],
           downloads: [],
           artifacts: [],
+          activityJournal: [],
           status: 'completed',
           error: null,
         },
@@ -861,6 +1009,27 @@ describe('backend app', () => {
     expect(response.status).toBe(202);
     expect(response.body.jobId).toBe('file_job_123');
     expect(response.body.queuedFiles).toEqual(['invoice.pdf']);
+  });
+
+  it('creates a remote file analysis job from a public URL', async () => {
+    const app = createApp({
+      enqueueRemoteFileAnalysisJob: async (url) => ({
+        jobId: 'file_job_remote_123',
+        status: 'queued',
+        queuedFiles: [url],
+        results: [],
+      }),
+    });
+
+    const response = await request(app)
+      .post('/api/analyze/files/remote')
+      .send({
+        url: 'https://example.org/invoice.pdf',
+      });
+
+    expect(response.status).toBe(202);
+    expect(response.body.jobId).toBe('file_job_remote_123');
+    expect(response.body.queuedFiles).toEqual(['https://example.org/invoice.pdf']);
   });
 
   it('returns a file analysis job by id', async () => {

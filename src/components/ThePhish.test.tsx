@@ -50,6 +50,33 @@ describe('ThePhish', () => {
               spf: 'fail',
               dkim: 'pass',
               dmarc: 'fail',
+              spfDetails: {
+                status: 'fail',
+                reason: 'Envelope sender IP is not authorized',
+                smtpMailFrom: 'secure-example.test',
+                headerFrom: null,
+                headerDomain: null,
+                selector: null,
+                action: null,
+              },
+              dkimDetails: {
+                status: 'pass',
+                reason: null,
+                smtpMailFrom: null,
+                headerFrom: null,
+                headerDomain: 'secure-example.test',
+                selector: null,
+                action: null,
+              },
+              dmarcDetails: {
+                status: 'fail',
+                reason: null,
+                smtpMailFrom: null,
+                headerFrom: 'secure-example.test',
+                headerDomain: null,
+                selector: null,
+                action: 'quarantine',
+              },
             },
             urls: [],
             inconsistencies: ['SPF failed for the sending domain.'],
@@ -174,6 +201,33 @@ describe('ThePhish', () => {
               spf: 'fail',
               dkim: 'pass',
               dmarc: 'fail',
+              spfDetails: {
+                status: 'fail',
+                reason: 'Envelope sender IP is not authorized',
+                smtpMailFrom: 'secure-example.test',
+                headerFrom: null,
+                headerDomain: null,
+                selector: null,
+                action: null,
+              },
+              dkimDetails: {
+                status: 'pass',
+                reason: null,
+                smtpMailFrom: null,
+                headerFrom: null,
+                headerDomain: 'secure-example.test',
+                selector: null,
+                action: null,
+              },
+              dmarcDetails: {
+                status: 'fail',
+                reason: null,
+                smtpMailFrom: null,
+                headerFrom: 'secure-example.test',
+                headerDomain: null,
+                selector: null,
+                action: 'quarantine',
+              },
             },
             urls: [
               {
@@ -458,8 +512,9 @@ describe('ThePhish', () => {
     expect(screen.getByText(/file analysis job: file_job_123/i)).toBeInTheDocument();
     expect(screen.getByText(/authentication/i)).toBeInTheDocument();
     expect(screen.getAllByText(/spf fail/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/envelope sender ip is not authorized/i)).toBeInTheDocument();
     expect(screen.getByText(/observable inventory/i)).toBeInTheDocument();
-    expect(screen.getByText(/https:\/\/evil.example\/login :: suspicious/i)).toBeInTheDocument();
+    expect(screen.getByText(/destination: https:\/\/evil.example\/login/i)).toBeInTheDocument();
     expect(screen.getByText(/related domains/i)).toBeInTheDocument();
     expect(screen.getByText(/domain has phishing-related reputation signals/i)).toBeInTheDocument();
     expect(screen.getByText(/external analyzer results/i)).toBeInTheDocument();

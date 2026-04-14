@@ -37,7 +37,7 @@ async function parseRawEmailWithAttachments(rawEmail: string): Promise<ParsedEma
   }
 
   const parsedMessage = await simpleParser(trimmedEmail);
-  const authenticationHeader = parsedMessage.headers.get('authentication-results');
+  const authenticationHeader = headerValue(parsedMessage.headers.get('authentication-results')) || extractHeader(trimmedEmail, 'authentication-results');
   const returnPathHeader = headerValue(parsedMessage.headers.get('return-path')) || extractHeader(trimmedEmail, 'return-path');
   const combinedContent = [parsedMessage.text, parsedMessage.html]
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
@@ -49,10 +49,10 @@ async function parseRawEmailWithAttachments(rawEmail: string): Promise<ParsedEma
   );
   const domains = [...new Set(emailAddresses.map((emailAddress) => emailAddress.split('@')[1].toLowerCase()))];
   const ipAddresses = uniqueMatches(trimmedEmail, /\b(?:\d{1,3}\.){3}\d{1,3}\b/g);
-  const urls = uniqueMatches(combinedContent || trimmedEmail, /https?:\/\/[^\s<>"]+/gi).map((url) => ({
-    originalUrl: url,
-    decodedUrl: decodeUrl(url),
-  }));
+  const urls = uniqueMatches(combinedContent || trimmedEmail, /https?:\/\/[^\s<>"]+/gi).map((url) => decodeParsedUrl(url));
+  const spfDetails = extractAuthenticationDetails(authenticationHeader, 'spf');
+  const dkimDetails = extractAuthenticationDetails(authenticationHeader, 'dkim');
+  const dmarcDetails = extractAuthenticationDetails(authenticationHeader, 'dmarc');
 
   const parsedEmail = emailParsingResponseSchema.parse({
     headers: {
@@ -64,9 +64,12 @@ async function parseRawEmailWithAttachments(rawEmail: string): Promise<ParsedEma
       returnPath: returnPathHeader,
     },
     authentication: {
-      spf: extractAuthenticationResult(authenticationHeader, 'spf'),
-      dkim: extractAuthenticationResult(authenticationHeader, 'dkim'),
-      dmarc: extractAuthenticationResult(authenticationHeader, 'dmarc'),
+      spf: spfDetails.status,
+      dkim: dkimDetails.status,
+      dmarc: dmarcDetails.status,
+      spfDetails,
+      dkimDetails,
+      dmarcDetails,
     },
     urls,
     emailAddresses,
@@ -138,16 +141,26 @@ function extractAddressText(value: unknown): string | null {
 }
 
 function extractHeader(rawEmail: string, headerName: string): string | null {
-  const match = rawEmail.match(new RegExp(`^${headerName}:\s*(.+)$`, 'im'));
+  const match = rawEmail.match(new RegExp(`^${escapeRegExp(headerName)}:\\s*(.+)$`, 'im'));
   return match?.[1]?.trim() || null;
 }
 
 function decodeUrl(url: string): string {
-  try {
-    return decodeURIComponent(url);
-  } catch {
-    return url;
+  let current = url;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) {
+        break;
+      }
+      current = decoded;
+    } catch {
+      break;
+    }
   }
+
+  return current;
 }
 
 function uniqueMatches(content: string, pattern: RegExp): string[] {
@@ -161,4 +174,90 @@ function extractAuthenticationResult(header: unknown, key: 'spf' | 'dkim' | 'dma
 
   const match = header.match(new RegExp(`${key}=([a-zA-Z]+)`, 'i'));
   return match?.[1]?.toLowerCase() || null;
+}
+
+function extractAuthenticationDetails(header: unknown, key: 'spf' | 'dkim' | 'dmarc') {
+  if (typeof header !== 'string') {
+    return emptyAuthenticationDetails();
+  }
+
+  const segment = header
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.toLowerCase().startsWith(`${key}=`));
+
+  if (!segment) {
+    return emptyAuthenticationDetails();
+  }
+
+  const statusMatch = segment.match(new RegExp(`^${key}=([a-zA-Z]+)\\b`, 'i'));
+  const reasonMatch = segment.match(/\(([^)]*)\)/);
+
+  return {
+    status: statusMatch?.[1]?.toLowerCase() || null,
+    reason: reasonMatch?.[1]?.trim() || null,
+    smtpMailFrom: extractAuthContextValue(segment, 'smtp.mailfrom'),
+    headerFrom: extractAuthContextValue(segment, 'header.from'),
+    headerDomain: extractAuthContextValue(segment, 'header.d'),
+    selector: extractAuthContextValue(segment, 'header.s'),
+    action: extractAuthContextValue(segment, 'action'),
+  };
+}
+
+function emptyAuthenticationDetails() {
+  return {
+    status: null,
+    reason: null,
+    smtpMailFrom: null,
+    headerFrom: null,
+    headerDomain: null,
+    selector: null,
+    action: null,
+  };
+}
+
+function extractAuthContextValue(segment: string, key: string): string | null {
+  const match = segment.match(new RegExp(`${escapeRegExp(key)}=([^\\s;]+)`, 'i'));
+  return match?.[1]?.trim() || null;
+}
+
+function decodeParsedUrl(url: string) {
+  const percentDecodedUrl = decodeUrl(url);
+  const resolutionChain = [{ label: 'Original', url }];
+  let decodedUrl = percentDecodedUrl;
+
+  if (percentDecodedUrl !== url) {
+    resolutionChain.push({ label: 'Percent-decoded', url: percentDecodedUrl });
+  }
+
+  const barracudaTarget = unwrapBarracudaLinkProtect(percentDecodedUrl);
+  if (barracudaTarget) {
+    decodedUrl = barracudaTarget;
+    resolutionChain.push({ label: 'Barracuda target', url: barracudaTarget });
+  }
+
+  return {
+    originalUrl: url,
+    decodedUrl,
+    ...(barracudaTarget ? { wrapperType: 'barracuda' as const } : {}),
+    ...(resolutionChain.length > 1 ? { resolutionChain } : {}),
+  };
+}
+
+function unwrapBarracudaLinkProtect(url: string): string | null {
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.hostname.toLowerCase() !== 'linkprotect.cudasvc.com') {
+      return null;
+    }
+
+    const target = parsedUrl.searchParams.get('a');
+    return target ? decodeUrl(target) : null;
+  } catch {
+    return null;
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

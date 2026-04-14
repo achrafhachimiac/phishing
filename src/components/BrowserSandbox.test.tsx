@@ -78,6 +78,7 @@ describe('BrowserSandbox', () => {
                 url: 'https://example.org/payload.iso',
                 sha256: 'abc123',
                 size: 4096,
+                fileAnalysisJobId: 'file_job_987',
               },
             ],
             artifacts: [
@@ -89,9 +90,96 @@ describe('BrowserSandbox', () => {
                 size: null,
               },
             ],
+            activityJournal: [
+              {
+                kind: 'navigation',
+                label: 'Final navigation target',
+                value: 'https://example.org/login',
+                path: null,
+                url: 'https://example.org/login',
+                severity: 'info',
+              },
+              {
+                kind: 'script_url',
+                label: 'Loaded script',
+                value: 'https://cdn.example.org/app.js',
+                path: null,
+                url: 'https://cdn.example.org/app.js',
+                severity: 'warning',
+              },
+              {
+                kind: 'download',
+                label: 'Downloaded file: payload.iso',
+                value: 'abc123',
+                path: 'storage/downloads/sandbox_job_123/payload.iso',
+                url: 'https://example.org/payload.iso',
+                severity: 'warning',
+              },
+            ],
             status: 'completed',
             error: null,
           },
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jobId: 'file_job_987',
+          status: 'completed',
+          queuedFiles: ['payload.iso'],
+          results: [
+            {
+              filename: 'payload.iso',
+              contentType: null,
+              detectedType: 'archive',
+              extension: 'iso',
+              size: 4096,
+              sha256: 'abc123',
+              extractedUrls: [],
+              indicators: [],
+              parserReports: [],
+              riskScore: 81,
+              riskScoreBreakdown: {
+                totalScore: 81,
+                thresholds: {
+                  suspicious: 25,
+                  malicious: 70,
+                },
+                factors: [],
+              },
+              iocEnrichment: {
+                status: 'completed',
+                extractedUrls: [],
+                extractedDomains: [],
+                results: [],
+                summary: 'No additional IOC hits returned.',
+                updatedAt: '2026-04-14T10:00:00.000Z',
+              },
+              verdict: 'malicious',
+              summary: 'Archive contains suspicious executable content.',
+              storagePath: null,
+              artifacts: [],
+              externalScans: {
+                virustotal: {
+                  status: 'unavailable',
+                  malicious: null,
+                  suspicious: null,
+                  reference: null,
+                },
+                clamav: {
+                  status: 'clean',
+                  signature: null,
+                  engine: null,
+                  detail: null,
+                },
+                yara: {
+                  status: 'clean',
+                  rules: [],
+                  detail: null,
+                },
+              },
+            },
+          ],
         }),
       } as Response);
 
@@ -112,9 +200,14 @@ describe('BrowserSandbox', () => {
     });
 
     expect(screen.getByText(/example login/i)).toBeInTheDocument();
-    expect(screen.getByText(/cdn.example.org\/app.js/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/cdn.example.org\/app.js/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/payload.iso/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/referenceerror: x is not defined/i)).toBeInTheDocument();
+    expect(screen.getByText(/final journal/i)).toBeInTheDocument();
+    expect(screen.getByText(/final navigation target/i)).toBeInTheDocument();
+    expect(screen.getByText(/downloaded file: payload.iso/i)).toBeInTheDocument();
+    expect(screen.getByText(/linked file analysis/i)).toBeInTheDocument();
+    expect(await screen.findByText(/archive contains suspicious executable content/i)).toBeInTheDocument();
     expect(screen.getByText(/provider note/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /open remote browser/i })).toHaveAttribute('href', 'https://fred.syntrix.ae/novnc/6161/vnc.html?autoconnect=1&resize=remote');
     expect(screen.getByRole('heading', { name: /live remote browser/i })).toBeInTheDocument();

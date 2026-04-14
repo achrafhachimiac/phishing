@@ -23,6 +23,54 @@ export const apiErrorSchema = z.object({
   message: z.string(),
 });
 
+export const caseEventSeveritySchema = z.enum(['info', 'success', 'warning', 'danger']);
+export const caseEventToolSchema = z.enum(['domain', 'email', 'sandbox', 'files', 'thephish']);
+export const caseEventReferenceKindSchema = z.enum(['job', 'artifact', 'url', 'domain', 'email', 'file', 'session']);
+
+export const caseEventReferenceSchema = z.object({
+  kind: caseEventReferenceKindSchema,
+  label: z.string(),
+  value: z.string(),
+  path: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+});
+
+export const caseEventSchema = z.object({
+  id: z.string(),
+  tool: caseEventToolSchema,
+  title: z.string(),
+  detail: z.string(),
+  severity: caseEventSeveritySchema,
+  occurredAt: z.string(),
+  references: z.array(caseEventReferenceSchema).optional(),
+});
+
+export const caseSessionSchema = z.object({
+  caseId: z.string(),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  activeTab: caseEventToolSchema,
+  visitedTabs: z.array(caseEventToolSchema),
+  events: z.array(caseEventSchema),
+});
+
+export const caseSessionSummarySchema = z.object({
+  caseId: z.string(),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  activeTab: caseEventToolSchema,
+  visitedTabs: z.array(caseEventToolSchema),
+  eventCount: z.number().int().nonnegative(),
+});
+
+export const currentCaseSessionResponseSchema = z.object({
+  case: caseSessionSchema.nullable(),
+});
+
+export const caseSessionListResponseSchema = z.object({
+  cases: z.array(caseSessionSummarySchema),
+});
+
 export const domainAnalysisRequestSchema = z.object({
   domain: z.string().trim().min(1),
 });
@@ -202,15 +250,35 @@ export const emailHeadersSchema = z.object({
   returnPath: z.string().nullable(),
 });
 
+export const emailAuthenticationDetailSchema = z.object({
+  status: z.string().nullable(),
+  reason: z.string().nullable(),
+  smtpMailFrom: z.string().nullable(),
+  headerFrom: z.string().nullable(),
+  headerDomain: z.string().nullable(),
+  selector: z.string().nullable(),
+  action: z.string().nullable(),
+});
+
 export const emailAuthenticationSchema = z.object({
   spf: z.string().nullable(),
   dkim: z.string().nullable(),
   dmarc: z.string().nullable(),
+  spfDetails: emailAuthenticationDetailSchema.optional(),
+  dkimDetails: emailAuthenticationDetailSchema.optional(),
+  dmarcDetails: emailAuthenticationDetailSchema.optional(),
+});
+
+export const parsedUrlResolutionStepSchema = z.object({
+  label: z.string(),
+  url: z.string(),
 });
 
 export const parsedUrlSchema = z.object({
   originalUrl: z.string(),
   decodedUrl: z.string(),
+  wrapperType: z.enum(['none', 'barracuda']).optional(),
+  resolutionChain: z.array(parsedUrlResolutionStepSchema).optional(),
 });
 
 export const analyzedUrlSchema = parsedUrlSchema.extend({
@@ -432,6 +500,16 @@ export const observedDownloadSchema = z.object({
   url: z.string().nullable(),
   sha256: z.string(),
   size: z.number().int().nonnegative(),
+  fileAnalysisJobId: z.string().nullable().optional(),
+});
+
+export const browserSandboxJournalEntrySchema = z.object({
+  kind: z.enum(['navigation', 'request_domain', 'script_url', 'console_error', 'download', 'artifact']),
+  label: z.string(),
+  value: z.string().nullable(),
+  path: z.string().nullable(),
+  url: z.string().nullable(),
+  severity: z.enum(['info', 'warning', 'danger']),
 });
 
 export const browserSandboxResultSchema = z.object({
@@ -448,6 +526,7 @@ export const browserSandboxResultSchema = z.object({
   consoleErrors: z.array(z.string()),
   downloads: z.array(observedDownloadSchema),
   artifacts: z.array(browserSandboxArtifactSchema),
+  activityJournal: z.array(browserSandboxJournalEntrySchema).default([]),
   status: z.enum(['completed', 'failed', 'stopped']),
   error: z.string().nullable(),
 });
@@ -469,6 +548,10 @@ export const fileUploadSchema = z.object({
 
 export const fileAnalysisRequestSchema = z.object({
   files: z.array(fileUploadSchema).min(1),
+});
+
+export const remoteFileAnalysisRequestSchema = z.object({
+  url: z.string().trim().url(),
 });
 
 export const fileIndicatorSchema = z.object({
@@ -631,6 +714,15 @@ export const fileAnalysisJobSchema = z.object({
 export type StoragePaths = z.infer<typeof storagePathsSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
+export type CaseEventSeverity = z.infer<typeof caseEventSeveritySchema>;
+export type CaseEventTool = z.infer<typeof caseEventToolSchema>;
+export type CaseEventReferenceKind = z.infer<typeof caseEventReferenceKindSchema>;
+export type CaseEventReference = z.infer<typeof caseEventReferenceSchema>;
+export type CaseEvent = z.infer<typeof caseEventSchema>;
+export type CaseSession = z.infer<typeof caseSessionSchema>;
+export type CaseSessionSummary = z.infer<typeof caseSessionSummarySchema>;
+export type CurrentCaseSessionResponse = z.infer<typeof currentCaseSessionResponseSchema>;
+export type CaseSessionListResponse = z.infer<typeof caseSessionListResponseSchema>;
 export type DomainAnalysisRequest = z.infer<typeof domainAnalysisRequestSchema>;
 export type DomainAnalysisResponse = z.infer<typeof domainAnalysisResponseSchema>;
 export type DomainDnsRecords = z.infer<typeof domainDnsRecordsSchema>;
@@ -642,9 +734,11 @@ export type DomainHistory = z.infer<typeof domainHistorySchema>;
 export type DomainCertificates = z.infer<typeof domainCertificatesSchema>;
 export type DomainReputation = z.infer<typeof domainReputationSchema>;
 export type CortexProviderSummary = z.infer<typeof cortexProviderSummarySchema>;
+export type EmailAuthenticationDetail = z.infer<typeof emailAuthenticationDetailSchema>;
 export type EmailParsingRequest = z.infer<typeof emailParsingRequestSchema>;
 export type EmailParsingResponse = z.infer<typeof emailParsingResponseSchema>;
 export type EmailAnalysisResponse = z.infer<typeof emailAnalysisResponseSchema>;
+export type ParsedUrlResolutionStep = z.infer<typeof parsedUrlResolutionStepSchema>;
 export type EmlAnalysisRequest = z.infer<typeof emlAnalysisRequestSchema>;
 export type EmlIgnoredAttachment = z.infer<typeof emlIgnoredAttachmentSchema>;
 export type ExternalAnalyzerStatus = z.infer<typeof externalAnalyzerStatusSchema>;
@@ -662,10 +756,12 @@ export type BrowserSandboxArtifact = z.infer<typeof browserSandboxArtifactSchema
 export type BrowserSandboxAccess = z.infer<typeof browserSandboxAccessSchema>;
 export type BrowserSandboxSession = z.infer<typeof browserSandboxSessionSchema>;
 export type ObservedDownload = z.infer<typeof observedDownloadSchema>;
+export type BrowserSandboxJournalEntry = z.infer<typeof browserSandboxJournalEntrySchema>;
 export type BrowserSandboxResult = z.infer<typeof browserSandboxResultSchema>;
 export type BrowserSandboxJob = z.infer<typeof browserSandboxJobSchema>;
 export type FileUpload = z.infer<typeof fileUploadSchema>;
 export type FileAnalysisRequest = z.infer<typeof fileAnalysisRequestSchema>;
+export type RemoteFileAnalysisRequest = z.infer<typeof remoteFileAnalysisRequestSchema>;
 export type FileIndicator = z.infer<typeof fileIndicatorSchema>;
 export type ExtractedArchiveTree = z.infer<typeof extractedArchiveTreeSchema>;
 export type FileRiskFactor = z.infer<typeof fileRiskFactorSchema>;
